@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from jobcase import JobCase, synthetic_nacp, synthetic_npdm, synthetic_nup
+from jobcase import JOBS, JobCase, synthetic_nacp, synthetic_npdm, synthetic_nup
 import library
 from core import atomic
 
@@ -319,6 +319,107 @@ raise SystemExit(main.main())
         self.assertEqual([row["status"] for row in done["result"]["sources"]], ["failed", "imported"])
         [game] = self.c.catalog()["games"]
         self.assertEqual([package["path"] for package in game["packages"]], [good])
+
+
+    # ---- 默认路径（不开 partialResults）与基线一致 ----
+
+    def record(self, terminal):
+        return json.loads((self.c.library / "logs" / "jobs" / (terminal["taskId"] + ".json")).read_text())
+
+    def test_default_path_result_and_record_have_no_sources(self):
+        good = self.source("good.nsp", b"complete fixture")
+        done = self.run_import([good])
+        self.assertEqual(done["state"], "succeeded")
+        self.assertEqual(set(done["result"]), {"imports"})
+        self.assertNotIn("sources", self.record(done))
+        bad = self.source("bad.nsp", b"unreadable fixture")
+        failed = self.run_import([bad])
+        self.assert_failure(failed, "content_unreadable")
+        self.assertEqual(failed["result"], {})
+        self.assertNotIn("sources", self.record(failed))
+        entry = self.root / "cancel.py"
+        entry.write_text(f"""import sys
+sys.path.insert(0, {str(JOBS)!r})
+import main
+from core import Cancelled
+def stop(*args, **kwargs):
+    raise Cancelled()
+main.library.inspect = stop
+raise SystemExit(main.main())
+""")
+        _, cancelled = self.worker("import", paths=[good], entrypoint=entry)
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertEqual(cancelled["result"], {})
+        self.assertNotIn("sources", self.record(cancelled))
+
+    def test_default_path_library_write_errors_keep_explain_codes(self):
+        # 基线：catalog / 封面写入的非盘满 OSError 走 explain()（permission_denied / input_missing），不统一成 job_failed
+        cover = self.source("cover.nsp", b"chinese title fixture")
+        plain = self.source("plain.nsp", b"complete fixture")
+        cases = (("catalog", "PermissionError(13, 'synthetic')", plain, "permission_denied"),
+                 ("catalog", "FileNotFoundError(2, 'synthetic')", plain, "input_missing"),
+                 ("cover", "PermissionError(13, 'synthetic')", cover, "permission_denied"),
+                 ("cover", "FileNotFoundError(2, 'synthetic')", cover, "input_missing"))
+        entry = self.root / "write-error.py"
+        for target, error, source, code in cases:
+            with self.subTest(target=target, code=code):
+                entry.write_text(f"""import sys
+sys.path.insert(0, {str(JOBS)!r})
+import main
+atomic = main.library.atomic
+def fail_catalog(path, value):
+    if path.name == 'catalog.json' and any(g['packages'] for g in value['games']):
+        raise {error}
+    atomic(path, value)
+def fail_cover(*args, **kwargs):
+    raise {error}
+if {target!r} == 'catalog':
+    main.library.atomic = fail_catalog
+else:
+    main.library._copy_cover = fail_cover
+raise SystemExit(main.main())
+""")
+                _, failed = self.worker("import", paths=[source], entrypoint=entry)
+                self.assert_failure(failed, code)
+                self.assertEqual(failed["result"], {})
+
+    # ---- 逐来源模式 ----
+
+    def test_sources_follow_caller_order_and_folders_expand_in_place(self):
+        late = self.source("z-late.nsp", b"complete fixture")
+        self.source("folder/b.nsp", b"unreadable fixture")
+        self.source("folder/a.nsp", b"unreadable fixture")
+        early = self.source("a-early.nsp", b"unreadable fixture")
+        folder = str((self.root / "folder").resolve())
+        done = self.run_import([late, folder, early], partialResults=True)
+        self.assertEqual([Path(row["path"]).name for row in done["result"]["sources"]],
+                         ["z-late.nsp", "a.nsp", "b.nsp", "a-early.nsp"])
+
+    def test_catalog_records_resolved_path_and_row_keeps_given_path(self):
+        real = Path(self.source("real/game.nsp", b"complete fixture"))
+        link = self.root / "link"
+        link.symlink_to(real.parent, target_is_directory=True)
+        given = str(link / "game.nsp")
+        done = self.run_import([given], partialResults=True)
+        [row] = done["result"]["sources"]
+        self.assertEqual((row["path"], row["status"]), (given, "imported"))
+        [game] = self.c.catalog()["games"]
+        self.assertEqual([p["path"] for p in game["packages"]], [str(real)])
+
+    def test_batch_diagnostics_have_a_total_cap(self):
+        from library import IMPORT_DIAGNOSTIC_LIMIT, IMPORT_DIAGNOSTIC_TOTAL
+        paths = [self.source(f"huge{i}.nsp", b"huge truncated fixture") for i in range(6)]
+        done = self.run_import(paths, partialResults=True)
+        rows = done["result"]["sources"]
+        self.assertEqual([row["code"] for row in rows], ["content_truncated"] * 6)
+        full = [row for row in rows if "TAIL-MARK" in row["diagnostic"]]
+        self.assertEqual(len(full), IMPORT_DIAGNOSTIC_TOTAL // IMPORT_DIAGNOSTIC_LIMIT)
+        self.assertLessEqual(sum(len(row["diagnostic"]) for row in full), IMPORT_DIAGNOSTIC_TOTAL)
+        for row in rows[len(full):]:
+            self.assertLess(len(row["diagnostic"]), 1000)
+            self.assertIn(row["log"], row["diagnostic"])
+            self.assertTrue((self.c.library / "logs" / row["log"]).is_file())
+        self.assertEqual(self.record(done)["sources"], rows)
 
 
 class NupImportTests(JobCase):
