@@ -788,9 +788,9 @@ def keys(c):
                         verified = True
             c.check()
             os.replace(temporary, c.keys)
-            atomic(c.private / "keys/status.json", dict(ready=True, verified=verified, imported=time.time()))
     finally:
         temporary.unlink(missing_ok=True)
+    atomic(c.private / "keys/status.json", dict(ready=True, verified=verified, imported=time.time()))
     return dict(entries=count, verified=verified, message="已验证解密能力" if verified else "格式通过，首次读取游戏时验证解密能力")
 
 
@@ -1231,18 +1231,20 @@ IMPORT_SOURCE_ERRORS = {
 
 def import_source(path, *, needs_keys=False):
     return dict(id=hashlib.sha256(os.fsencode(path)).hexdigest(), path=str(path), name=path.name,
-                fileName=path.name, needsKeys=needs_keys, status="unprocessed", code=None, reason="", diagnostic="")
+                fileName=path.name, needsKeys=needs_keys, status="unprocessed", code=None, reason="", log="", diagnostic="")
 
 
-# 单个来源写进作业记录的诊断上限（字符）。超出时保留开头与结尾，中间标注已省略。
-IMPORT_DIAGNOSTIC_LIMIT = 100_000
+# 写进结果与任务记录的诊断上限（字符）：单个来源 16k，整批合计 64k（catalog() 每次回传最近 200 条任务记录，不能随来源个数膨胀）。
+# 单个超出时保留开头与结尾、中间标注已省略；整批用完后，后面的来源只留原因和按来源命名的日志文件名。
+IMPORT_DIAGNOSTIC_LIMIT = 16_000
+IMPORT_DIAGNOSTIC_TOTAL = 64_000
 
 
 def cap_diagnostic(text, limit=IMPORT_DIAGNOSTIC_LIMIT):
     if len(text) <= limit:
         return text
     marker = "\n…[已省略中间部分]…\n"
-    keep = limit - len(marker)
+    keep = max(0, limit - len(marker))
     head = keep // 4
     return text[:head] + marker + text[len(text) - (keep - head):]
 
@@ -1252,13 +1254,21 @@ def import_source_failed(c, row, error):
     if c.r.get("partialResults") is True and isinstance(error, OSError) and error.errno in (errno.EIO, errno.ENODEV):
         failure = Failure("读不了游戏文件。", code="input_unreadable", internal=str(error))
     detail = [str(failure), failure.internal]
+    log = c.last_log.name if c.last_log else ""
     if c.last_log:
         try:
             detail.append(c.last_log.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             pass
-    row.update(status="failed", code=failure.code, reason=c.redact(failure),
-               diagnostic=cap_diagnostic(c.redact("\n".join(filter(None, detail)).replace(row["path"], row["fileName"]), limit=None)))
+    reason = c.redact(failure)
+    left = c.import_diagnostic_left
+    if left > 0:
+        diagnostic = cap_diagnostic(c.redact("\n".join(filter(None, detail)).replace(row["path"], row["fileName"]), limit=None),
+                                    min(IMPORT_DIAGNOSTIC_LIMIT, left))
+        c.import_diagnostic_left = left - len(diagnostic)
+    else:
+        diagnostic = reason + (f"\n（本批诊断已达上限，完整日志：{log}）" if log else "\n（本批诊断已达上限）")
+    row.update(status="failed", code=failure.code, reason=reason, log=log, diagnostic=diagnostic)
 
 
 def scan_import(c, picked, *, partial):
@@ -1325,7 +1335,8 @@ def record_import_packages(c, cat, source, packages, icons, sha, size, extracted
                 try:
                     _copy_cover(c, tid, game, metadata, icon)
                 except OSError as error:
-                    if explain(error).code == "disk_full":
+                    # 默认路径照原样抛，交给 explain() 归类（permission_denied / input_missing 等）
+                    if c.r.get("partialResults") is not True or explain(error).code == "disk_full":
                         raise
                     raise Failure("游戏库封面无法写入。", internal=str(error)) from error
             metadata.pop("icon", None)
@@ -1338,54 +1349,80 @@ def record_import_packages(c, cat, source, packages, icons, sha, size, extracted
 
 
 def initial_import_result(c):
+    c.import_diagnostic_left = IMPORT_DIAGNOSTIC_TOTAL
     paths = dict.fromkeys(Path(os.path.abspath(Path(raw).expanduser())) for raw in c.r["paths"])
     return dict(imports=[], sources=[import_source(path, needs_keys=path.suffix.lower() in SOURCE_SUFFIXES[:-1])
                                     for path in paths])
 
 
+def import_failure_result(c):
+    """失败 / 取消的终态事件与任务记录带的逐来源结果：只在调用方开了 partialResults 时给，默认路径与原来一样不带"""
+    return getattr(c, "import_result", None) if c.r.get("partialResults") is True else None
+
+
 def import_games(c):
     partial = c.r.get("partialResults") is True
     c.import_result = initial_import_result(c)
-    sources = {Path(row["path"]): row for row in c.import_result["sources"]}
-    picked = list(sources)
+    picked = [Path(row["path"]) for row in c.import_result["sources"]]
+    # 来源行按调用方给的顺序；选的文件夹在原位置展开成里面的来源（按路径排序）。行里的路径保留调用方给的原样，写进 catalog 的统一用 resolve 后的路径
+    groups = {path: [row] for path, row in zip(picked, c.import_result["sources"])}
+    rows = {}   # resolve 后的路径 → 来源行
     results = c.import_result["imports"]
+
+    def publish():
+        c.import_result["sources"] = [row for group in groups.values() for row in group]
+
     c.begin("检查导入文件")
     c.require_library()
+    if not partial:
+        # 外接盘 / 下载文件夹第一次读会弹系统授权框：先试读，框没点之前界面要说清在等什么，别一直停在「检查导入文件」
+        wait_readable(c, [path for path in picked if path.exists()])
     files, extracts = [], []
     for path in picked:
         c.check()
         try:
-            if path.exists():
+            if partial and path.exists():
                 wait_readable(c, [path])
-            found_files, found_extracts, errors = scan_import(c, path if partial else path.resolve(), partial=partial)
+            real = path.resolve()
+            found_files, found_extracts, errors = scan_import(c, real, partial=partial)
+
+            def shown(found):
+                try:
+                    return path / found.relative_to(real) if found != real else path
+                except ValueError:
+                    return found
+
+            found = dict.fromkeys(found_files, True) | dict.fromkeys(found_extracts, False)
+            group = []
+            for source in sorted(found, key=shown):
+                if source not in rows:   # 同一份被选了两次（文件和它所在的文件夹）只列一行
+                    rows[source] = import_source(shown(source), needs_keys=found[source] and source.suffix.lower() != NUP_SUFFIX)
+                    group.append(rows[source])
+            for bad_path in sorted(errors, key=shown):
+                row = import_source(shown(bad_path))
+                import_source_failed(c, row, errors[bad_path])
+                group.append(row)
+            groups[path] = group
             files.extend(found_files)
             extracts.extend(found_extracts)
-            for source in found_files:
-                sources[source] = import_source(source, needs_keys=source.suffix.lower() != NUP_SUFFIX)
-            for source in found_extracts:
-                sources[source] = import_source(source)
-            if path not in found_files and path not in found_extracts:
-                sources.pop(path, None)
-            for bad_path, error in errors.items():
-                row = sources[bad_path] = import_source(bad_path)
-                import_source_failed(c, row, error)
         except (Failure, OSError) as error:
             # Legacy callers skip empty folders alongside usable sources.
             if not partial and explain(error).code == "input_empty":
-                sources.pop(path, None)
+                groups[path] = []
                 continue
-            import_source_failed(c, sources[path], error)
-            if not partial or sources[path]["code"] not in IMPORT_SOURCE_ERRORS:
+            import_source_failed(c, groups[path][0], error)
+            if not partial or groups[path][0]["code"] not in IMPORT_SOURCE_ERRORS:
                 raise
         finally:
-            c.import_result["sources"] = list(sources.values())
+            publish()
     files = sorted(set(files))
     extracts = sorted(set(extracts))
     paths = files + extracts
-    c.import_result["sources"] = [sources[p] for p in sorted(sources)]
-    if not sources:
+    if not c.import_result["sources"]:
         raise Failure("所选位置没有 NSP、XCI 文件或解包好的游戏文件夹。", code="input_empty")
-    if any(sources[p]["needsKeys"] for p in files) and not c.keys.is_file():
+    # prod.keys 只有 Switch 1 原件（NSP / XCI / NSZ / XCZ，要读取器解密）才要；只放 Switch 2 NUP 容器或解包目录不要密钥
+    switch1 = [f for f in files if rows[f]["needsKeys"]]
+    if switch1 and not c.keys.is_file():
         raise Failure("请先导入 prod.keys。", code="keys_missing")
     with c.lock():
         cat = c.catalog()
@@ -1393,11 +1430,12 @@ def import_games(c):
         extract_paths = set(extracts)
         total = len(paths) * 2
         for idx, source in enumerate(paths):
-            c.last_log = None
-            c.last_rc = None
+            if partial:
+                c.last_log = None
+                c.last_rc = None
+                c.require_library()
             c.check()
-            c.require_library()
-            row = sources[source]
+            row = rows[source]
             extracted = source in extract_paths
             draft = deepcopy(cat)
             diagnostics_before = len(c.job["diagnostics"])
@@ -1407,7 +1445,7 @@ def import_games(c):
                     if extracted:
                         packages = extract_inspect(c, source, icons)
                     elif row["needsKeys"]:
-                        packages = inspect(c, source, icons, source_id=row["id"])
+                        packages = inspect(c, source, icons, source_id=row["id"] if partial else None)
                     else:
                         packages = nup_inspect(c, source, icons)
                     row["name"] = next((p["name"] for p in packages if p.get("name")), source.name)
@@ -1419,29 +1457,37 @@ def import_games(c):
                         sha = digest(source, c.progress)
                     entries = record_import_packages(c, draft, source, packages, icons, sha, size, extracted)
                     c.check()
-                    c.require_library()
+                    if partial:
+                        c.require_library()
                     try:
                         atomic(c.library / "catalog.json", draft)
                     except OSError as error:
-                        failure = explain(error)
-                        if failure.code == "disk_full":
+                        # 默认路径照原样抛，交给 explain() 归类
+                        if not partial or explain(error).code == "disk_full":
                             raise
                         raise Failure("游戏库目录无法写入。", internal=str(error)) from error
             except (Failure, OSError) as error:
+                if not partial:
+                    raise
                 import_source_failed(c, row, error)
-                if not partial or row["code"] not in IMPORT_SOURCE_ERRORS:
+                if row["code"] not in IMPORT_SOURCE_ERRORS:
                     raise
                 del c.job["diagnostics"][diagnostics_before:]
             else:
                 cat = draft
                 results.extend(entries)
                 row["status"] = "duplicate" if all(entry["duplicate"] for entry in entries) else "imported"
-                if row["needsKeys"] and not verified:
+                # 逐来源模式：读通一个 Switch 1 原件就算验证过（后面的来源失败不影响）
+                if partial and row["needsKeys"] and not verified:
                     atomic(c.private / "keys/status.json", dict(ready=True, verified=True))
                     verified = True
     added = {r["id"].upper() for r in results if not r["duplicate"]}
     if added:
         store_meta_background(c, added)   # 横图、英文标题：后台查（导入不等联网），查到英文名接着改文件夹名
+    if not partial:
+        if switch1:   # 读取器用这份密钥读通了 Switch 1 原件才算验证过；只导 NUP 或解包目录没用到密钥，不改密钥状态
+            atomic(c.private / "keys/status.json", dict(ready=True, verified=True))
+        return {"imports": results}
     return c.import_result
 
 
