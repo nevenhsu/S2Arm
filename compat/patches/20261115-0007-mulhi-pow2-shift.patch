@@ -1,0 +1,65 @@
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/Optimizations/Simplification.cs b/src/Ryujinx.Graphics.Shader/Translation/Optimizations/Simplification.cs
+index 282c136e1d2d9bf72e57885e453eddf315675189..ad99cc68452a44d5281b18eb7012086b64311009 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/Optimizations/Simplification.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Optimizations/Simplification.cs
+@@ -48,6 +48,10 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+                     TryEliminateBinaryOpCommutative(operation, 1);
+                     break;
+ 
++                case Instruction.MultiplyHighU32:
++                    TryRewriteMultiplyHighU32ByPowerOfTwo(operation);
++                    break;
++
+                 case Instruction.ShiftLeft:
+                 case Instruction.ShiftRightS32:
+                 case Instruction.ShiftRightU32:
+@@ -179,6 +183,49 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+             }
+         }
+ 
++        // S2A: the high word of an unsigned 32 x 32 product by a constant 2^k (1 <= k <= 31) is exactly x >> (32 - k).
++        // Address arithmetic (a 64-bit index * 16 split into words) hits this dozens of times per shader; as MultiplyHighU32 it
++        // becomes SPIR-V OpUMulExtended, which the MSL backend wraps in an optnone helper: a real function call per use on the GPU.
++        private static void TryRewriteMultiplyHighU32ByPowerOfTwo(Operation operation)
++        {
++            Operand x = operation.GetSource(0);
++            Operand y = operation.GetSource(1);
++
++            if (!TryGetPowerOfTwoShift(y, out int shift))
++            {
++                if (!TryGetPowerOfTwoShift(x, out shift))
++                {
++                    return;
++                }
++
++                x = y;
++            }
++
++            operation.TurnInto(Instruction.ShiftRightU32, x);
++            operation.AppendSources([Const(32 - shift)]);
++        }
++
++        private static bool TryGetPowerOfTwoShift(Operand operand, out int shift)
++        {
++            shift = 0;
++
++            if (operand.Type != OperandType.Constant)
++            {
++                return false;
++            }
++
++            uint value = (uint)operand.Value;
++
++            if (value < 2 || (value & (value - 1)) != 0)
++            {
++                return false;
++            }
++
++            shift = System.Numerics.BitOperations.TrailingZeroCount(value);
++
++            return true;
++        }
++
+         private static void TryEliminateCompareNotEqual(Operation operation)
+         {
+             // Comparison instruction returns 0 if the result is false, and -1 if true.

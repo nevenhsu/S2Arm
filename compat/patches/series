@@ -590,3 +590,4 @@
 20261114-0418-system-data-synth-fallback.patch
 20261114-0312-audio-depth-pace.patch
 20261114-0125-audio-cb-nonblocking.patch
+20261115-0007-mulhi-pow2-shift.patch
