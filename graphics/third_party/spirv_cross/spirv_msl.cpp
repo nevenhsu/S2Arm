@@ -6422,11 +6422,15 @@ void CompilerMSL::emit_custom_functions()
 			break;
 
 		// "fadd" intrinsic support
+		// S2A: NoContraction helpers stay inline. The 0 / 1 operand of each fma comes from a volatile read, so neither the front end nor the
+		// backend can fold fma(l, r, 0) into fmul (legal under nsz) and contract it; the rounding is that of the former optnone helpers,
+		// without a real call per use (optnone implies noinline).
 		case SPVFuncImplFAdd:
 			statement("template<typename T>");
-			statement("[[clang::optnone]] T spvFAdd(T l, T r)");
+			statement("inline T spvFAdd(T l, T r)");
 			begin_scope();
-			statement("return fma(T(1), l, r);");
+			statement("thread volatile float o = 1.0f;");
+			statement("return fma(T(o), l, r);");
 			end_scope();
 			statement("");
 			break;
@@ -6434,9 +6438,10 @@ void CompilerMSL::emit_custom_functions()
 		// "fsub" intrinsic support
 		case SPVFuncImplFSub:
 			statement("template<typename T>");
-			statement("[[clang::optnone]] T spvFSub(T l, T r)");
+			statement("inline T spvFSub(T l, T r)");
 			begin_scope();
-			statement("return fma(T(-1), r, l);");
+			statement("thread volatile float o = 1.0f;");
+			statement("return fma(T(-o), r, l);");
 			end_scope();
 			statement("");
 			break;
@@ -6444,16 +6449,18 @@ void CompilerMSL::emit_custom_functions()
 		// "fmul' intrinsic support
 		case SPVFuncImplFMul:
 			statement("template<typename T>");
-			statement("[[clang::optnone]] T spvFMul(T l, T r)");
+			statement("inline T spvFMul(T l, T r)");
 			begin_scope();
-			statement("return fma(l, r, T(0));");
+			statement("thread volatile float z = 0.0f;");
+			statement("return fma(l, r, T(z));");
 			end_scope();
 			statement("");
 
 			statement("template<typename T, int Cols, int Rows>");
-			statement("[[clang::optnone]] vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
+			statement("inline vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
 			begin_scope();
-			statement("vec<T, Cols> res = vec<T, Cols>(0);");
+			statement("thread volatile float z = 0.0f;");
+			statement("vec<T, Cols> res = vec<T, Cols>(T(z));");
 			statement("for (uint i = Rows; i > 0; --i)");
 			begin_scope();
 			statement("vec<T, Cols> tmp(0);");
@@ -6468,9 +6475,10 @@ void CompilerMSL::emit_custom_functions()
 			statement("");
 
 			statement("template<typename T, int Cols, int Rows>");
-			statement("[[clang::optnone]] vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
+			statement("inline vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
 			begin_scope();
-			statement("vec<T, Rows> res = vec<T, Rows>(0);");
+			statement("thread volatile float z = 0.0f;");
+			statement("vec<T, Rows> res = vec<T, Rows>(T(z));");
 			statement("for (uint i = Cols; i > 0; --i)");
 			begin_scope();
 			statement("res = fma(m[i - 1], vec<T, Rows>(v[i - 1]), res);");
@@ -6480,13 +6488,14 @@ void CompilerMSL::emit_custom_functions()
 			statement("");
 
 			statement("template<typename T, int LCols, int LRows, int RCols, int RRows>");
-			statement("[[clang::optnone]] matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)");
+			statement("inline matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)");
 			begin_scope();
+			statement("thread volatile float z = 0.0f;");
 			statement("static_assert(LCols == RRows, \"column-row configuration mismatch\");");
 			statement("matrix<T, RCols, LRows> res;");
 			statement("for (uint i = 0; i < RCols; i++)");
 			begin_scope();
-			statement("vec<T, LRows> tmp(0);");
+			statement("vec<T, LRows> tmp = vec<T, LRows>(T(z));");
 			statement("for (uint j = 0; j < LCols; j++)");
 			begin_scope();
 			statement("tmp = fma(vec<T, LRows>(r[i][j]), l[j], tmp);");

@@ -1,0 +1,18 @@
+#version 450
+// precise 运算 → SPIR-V NoContraction → MSL 的 spvFMul / spvFAdd / spvFSub / 三种矩阵乘辅助函数
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer In { vec4 a[]; };
+layout(std430, binding = 1) writeonly buffer Out { vec4 o[]; };
+layout(std430, binding = 2) readonly buffer M { mat4 m; };
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    vec4 x = a[i * 3u], y = a[i * 3u + 1u], z = a[i * 3u + 2u];
+    precise vec4 p = x * y + z;
+    precise vec4 q = x * y - z;
+    precise vec4 r = m * x + y;
+    precise vec4 s = x * m - z;
+    precise mat4 mm = m * m;
+    precise vec4 t = mm * y + x * z;
+    o[i * 5u] = p; o[i * 5u + 1u] = q; o[i * 5u + 2u] = r; o[i * 5u + 3u] = s; o[i * 5u + 4u] = t;
+}
