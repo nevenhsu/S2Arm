@@ -7,6 +7,7 @@
 #
 # 合併有衝突就停下（不自動解）：保留 upstream 的新寫法、補回優化後再跑一次。
 set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd -P)   # 先解析：下面會 cd 進工作樹，相對的 $0 之後就找不到了
 WS=/Users/neven/Documents/projects/switch
 REPO=$WS/s2arm
 WT=$WS/wt-perf-pack
@@ -51,7 +52,7 @@ echo "origin/$BR = $(git rev-parse --short HEAD)"
 [ "$INSTALL" = 1 ] || { say "--no-install：不出包安裝"; exit 0; }
 
 say "出包並換掉 /Applications/S2Arm.app（install_main.sh）"
-bash "$(dirname "$0")/install_main.sh" "$BR"
+bash "$HERE/install_main.sh" "$BR"
 
 # 出包產物（wt-upstream-main/build/macos 裡的 S2Arm.app、S2ArmGame.app）不給聚焦搜尋收錄：
 #   真目錄改名成 macos.noindex，原路徑留符號連結（install_main.sh / 測試腳本照舊用 build/macos）
