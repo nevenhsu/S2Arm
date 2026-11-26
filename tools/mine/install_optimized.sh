@@ -1,6 +1,6 @@
 #!/bin/bash
 # 「最新 S2Arm 加上我的優化」：把 upstream main 合進自用分支 mine/optimized-s2arm（工作樹 wt-perf-pack），
-#   編宿主確認、推到自己的倉庫（origin），再用 install_main.sh 整份出包換掉 /Applications/S2Arm.app（先備份）。
+#   編宿主確認、推到自己的倉庫（origin），再用 install_main.sh 整份出包換掉 /Applications/S2Arm.app（不備份；要回原版就下載官方版覆蓋）。
 #
 # 用法：bash tools/mine/install_optimized.sh（或 work/tools/install_optimized.sh，連到這裡） [--no-install]
 #   --no-install：只合併、編、推，不出包安裝
