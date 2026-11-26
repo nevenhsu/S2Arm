@@ -33,9 +33,11 @@ else
   fi
 fi
 
-# #2242 合進 upstream 後，分支裡那份就是重複的：提醒（不自動拿掉）
-if command -v gh >/dev/null && [ "$(gh pr view 2242 --repo jhaizhou-ops/S2Arm --json state -q .state 2>/dev/null)" = "MERGED" ]; then
-  echo "提醒：#2242 已合進 upstream，分支裡的那份可以拿掉了"
+# 等 upstream 合入的 PR（#2242 AV1 影片解碼、#2262 帧比例实测帧时）：合進 upstream 後分支裡那份就是重複的，提醒（不自動拿掉）
+if command -v gh >/dev/null; then
+  for pr in 2242 2262; do
+    [ "$(gh pr view "$pr" --repo jhaizhou-ops/S2Arm --json state -q .state 2>/dev/null)" = "MERGED" ] && echo "提醒：#$pr 已合進 upstream，分支裡的那份可以拿掉了"
+  done
 fi
 
 say "編宿主確認（帶視窗前端）"
