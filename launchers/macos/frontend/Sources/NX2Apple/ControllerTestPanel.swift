@@ -191,8 +191,9 @@ struct ControllerTestPanelView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button(SimText.pick("上一步", "上一步", "Back")) { hub.step(-1) }.disabled(hub.stepIndex == 0)
-                Button(SimText.pick("下一步", "下一步", "Next")) { hub.step(1) }.disabled(hub.stepIndex >= flow.steps.count - 1)
+                // 按钮不让旁边的文字挤窄（11-27：「上一步」边框被裁掉）
+                Button(SimText.pick("上一步", "上一步", "Back")) { hub.step(-1) }.disabled(hub.stepIndex == 0).fixedSize()
+                Button(SimText.pick("下一步", "下一步", "Next")) { hub.step(1) }.disabled(hub.stepIndex >= flow.steps.count - 1).fixedSize()
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor)).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -274,7 +275,7 @@ private struct ChannelColumn: View {
                         .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
                 }
                 // 测试中：右上角一张实色示意（标准姿态、固定视角），转动类的步骤从上一个姿态循环转到目标，看得出怎么动
-                if let poses = hub.illustration(side: channel.side) {
+                if let poses = hub.illustration(for: channel) {
                     StepInset(from: poses.from, to: poses.to, shape: hub.shape(for: channel),
                               tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
                         .frame(width: 120, height: 96)
@@ -540,7 +541,7 @@ struct PoseView: NSViewRepresentable {
     }
 }
 
-/// 步骤示意（右上角小图）：实色模型、固定斜视角；有 from 时循环从 from 转到 to（转 1.2 秒、停 0.8 秒）
+/// 步骤示意（右上角小图）：实色模型、同主画面的缺省视角；有 from 时循环从 from 转到 to（转 1.2 秒、停 0.8 秒）
 struct StepInset: NSViewRepresentable {
     let from: simd_quatd?
     let to: simd_quatd
@@ -558,7 +559,7 @@ struct StepInset: NSViewRepresentable {
         scene.rootNode.addChildNode(world)
         world.addChildNode(context.coordinator.model)
         let camera = SCNNode(); camera.camera = SCNCamera(); camera.camera?.fieldOfView = 40; camera.camera?.zNear = 0.01
-        camera.position = SCNVector3(0.1, 0.11, 0.21); camera.look(at: SCNVector3(0, 0, 0))
+        camera.position = PoseView.cameraHome; camera.look(at: SCNVector3(0, 0, 0))   // 同主画面的缺省视角（正前方稍高），跟淡色模型看起来一样
         scene.rootNode.addChildNode(camera); view.pointOfView = camera
         return view
     }
