@@ -240,7 +240,7 @@ private struct ChannelColumn: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 if let s {
                     Text(PoseText.describe(hub.poseFromGame ? ControllerTestIMU.gameView(s, shape: channel.shape) : s, pose: pose))
-                        .font(.system(size: 10)).foregroundStyle(.secondary).multilineTextAlignment(.trailing).padding(8)
+                        .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).multilineTextAlignment(.trailing).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
                 }
             }
             group(SimText.pick("加速度", "加速度", "Accelerometer"), unit: "g", values: s.map { [$0.accel.x, $0.accel.y, $0.accel.z] }, range: 2, format: "%+.2f")

@@ -131,6 +131,7 @@ struct ControllerTestStep: Equatable {
         let meta: String
         let kind: Kind
         let dots: [ControllerTint?]   // 颜色点：一对两颗
+        var joyConSide: String? = nil   // 单只 Joy-Con 是哪一只（L / R）：模型画左只还是右只、录制的 side 栏
         var isPair: Bool { if case .relay(_, .pair) = kind { return true }; return false }
         var wholePad: Bool { if case .relay(_, .other) = kind { return true }; if case .system = kind { return true }; return false }
     }
@@ -175,7 +176,8 @@ struct ControllerTestStep: Equatable {
                                   player: player { switch $0 { case let .single(x, _), let .whole(x, _): return x == d.id; case let .pair(a, b): return a == d.id || b == d.id; default: return false } },
                                   meta: simulated ? simMeta : relayMeta,
                                   kind: simulated ? .simulated : .relay(player: d.player, shape: joyCon ? .single : .other),
-                                  dots: joyCon ? [tint(d.id, left: d.kind == 2)] : [ControllerTint(body: 0x3b3b3b)]))
+                                  dots: joyCon ? [tint(d.id, left: d.kind == 2)] : [ControllerTint(body: 0x3b3b3b)],
+                                  joyConSide: joyCon ? (d.kind == 2 ? "L" : "R") : nil))
             }
         }
         let pads = systems?.pads ?? []
@@ -284,7 +286,7 @@ struct ControllerTestStep: Equatable {
         guard let target = selected else { channels = []; return }
         switch target.kind {
         case let .relay(_, shape):
-            channels = shape == .pair ? [Channel(side: "L", shape: .pair), Channel(side: "R", shape: .pair)] : [Channel(side: "-", shape: shape)]
+            channels = shape == .pair ? [Channel(side: "L", shape: .pair), Channel(side: "R", shape: .pair)] : [Channel(side: target.joyConSide ?? "-", shape: shape)]
         case let .system(id):
             channels = [Channel(side: "-", shape: .other)]
             if open { attachMotion(id) }
@@ -313,9 +315,7 @@ struct ControllerTestStep: Equatable {
         guard open, let target = selected, case let .relay(player, shape) = target.kind else { return }
         let now = ProcessInfo.processInfo.systemUptime
         for m in batch where Int(m.player) == player {
-            let side: String
-            if shape == .pair { side = m.side == 1 ? "L" : "R" } else { side = "-" }
-            guard let channel = channels.first(where: { $0.side == side }) else { continue }
+            guard let channel = shape == .pair ? channels.first(where: { $0.side == (m.side == 1 ? "L" : "R") }) : channels.first else { continue }
             // 连接程序每 8 ms 心跳会重送同一笔：按时间戳去重，取样率才是真的
             if m.host_timestamp_us != 0 {
                 if m.host_timestamp_us == channel.lastStamp { continue }
