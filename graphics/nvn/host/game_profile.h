@@ -23,7 +23,6 @@ int s2a_fps60_display_source(void);
 #define DM_GAME_TEX_DIRTY_UPLOAD (s2a_nvn_prof()->t.tex_dirty_upload)
 #define DM_GAME_TEX_DYN_SLOTS    (s2a_nvn_prof()->t.tex_dyn_slots)
 #define DM_GAME_GPU_TS_SEGMENT   (s2a_nvn_prof()->t.gpu_ts_segment)
-#define DM_GAME_GPU_TS_FRAME     (s2a_nvn_prof()->t.gpu_ts_frame)
 #define DM_GAME_VCONV_RANGE      (s2a_nvn_prof()->t.vconv_range)
 #define DM_GAME_DRAW_BARRIERS_GAME (s2a_nvn_prof()->t.draw_barriers_game)
 #define DM_GAME_ALPHA_FROM_RED   (s2a_nvn_prof()->t.alpha_from_red)

@@ -14,7 +14,7 @@
 
 typedef struct {
     uint64_t app_pool;
-    int present_display, present_display_derived, fps_hold, render_cond, tex_flush_upload, tex_dirty_upload, tex_dyn_slots, gpu_ts_segment, gpu_ts_frame, vconv_range, draw_barriers_game;
+    int present_display, present_display_derived, fps_hold, render_cond, tex_flush_upload, tex_dirty_upload, tex_dyn_slots, gpu_ts_segment, vconv_range, draw_barriers_game;
     char alpha_from_red[2048], feedback_snap[512], zero_skip[512];
 } s2a_game_tsv;
 
@@ -50,7 +50,7 @@ static inline int s2a_game_tsv_find(const char *text, const char *key, char *out
     return 0;
 }
 
-// 开关键：on / off（gpu_timestamps：segment / submission / frame；present_interval：display / game；draw_barriers：game / full）。看不懂 → 写一行到 err、保持缺省
+// 开关键：on / off（gpu_timestamps：segment / submission；present_interval：display / game；draw_barriers：game / full）。看不懂 → 写一行到 err、保持缺省
 static inline void s2a_game_tsv_switch(const char *text, const char *key, const char *on, const char *off, int *dst, char *err, size_t en) {
     char v[64]; if (!s2a_game_tsv_find(text, key, v, sizeof v)) return;
     if (!strcmp(v, on)) *dst = 1; else if (!strcmp(v, off)) *dst = 0;
@@ -77,12 +77,7 @@ static inline void s2a_game_tsv_parse(const char *text, s2a_game_tsv *g, char *e
     s2a_game_tsv_switch(text, "tex_flush_upload", "on", "off", &g->tex_flush_upload, err, en);
     s2a_game_tsv_switch(text, "tex_dirty_upload", "on", "off", &g->tex_dirty_upload, err, en);
     s2a_game_tsv_switch(text, "tex_dyn_slots", "on", "off", &g->tex_dyn_slots, err, en);
-    if (s2a_game_tsv_find(text, "gpu_timestamps", v, sizeof v)) {
-        if (!strcmp(v, "segment")) { g->gpu_ts_segment = 1; g->gpu_ts_frame = 0; }
-        else if (!strcmp(v, "submission")) { g->gpu_ts_segment = 0; g->gpu_ts_frame = 0; }
-        else if (!strcmp(v, "frame")) { g->gpu_ts_segment = 0; g->gpu_ts_frame = 1; }
-        else if (err && !*err) snprintf(err, en, "gpu_timestamps 的值「%s」看不懂（要 segment / submission / frame），按缺省", v);
-    }
+    s2a_game_tsv_switch(text, "gpu_timestamps", "segment", "submission", &g->gpu_ts_segment, err, en);
     s2a_game_tsv_switch(text, "vconv_range", "on", "off", &g->vconv_range, err, en);
     s2a_game_tsv_switch(text, "draw_barriers", "game", "full", &g->draw_barriers_game, err, en);
     { char d[8]; if (!s2a_game_tsv_find(text, "tex_dirty_upload", d, sizeof d)) g->tex_dirty_upload = g->tex_flush_upload; }   // 同 game.py：没写时随 tex_flush_upload

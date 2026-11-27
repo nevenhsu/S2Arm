@@ -107,7 +107,7 @@ static void prof_load(const char *gd_in) {
         const s2a_game_tsv *t = &g_prof.t;
         LOG("直连：每款参数 %s（%s）：app_pool %#llx、条件渲染 %s、CPU 写贴图上传 %s / 脏页 %s、动态贴图句柄 %s、计数器时间戳 %s、绘制遍屏障 %s、上屏 %s、帧保持 %s、按绘制转顶点 %s%s%s",
             DM_GAME_ID, got ? p : "没有随包 game.tsv，全按缺省", (unsigned long long)t->app_pool, t->render_cond ? "开" : "关", t->tex_flush_upload ? "开" : "关",
-            t->tex_dirty_upload ? "开" : "关", t->tex_dyn_slots ? "开" : "关", t->gpu_ts_frame ? "每帧同刻" : t->gpu_ts_segment ? "GPU 起止" : "整次提交", t->draw_barriers_game ? "按游戏屏障" : "全屏障", t->present_display ? "按显示" : "按游戏",
+            t->tex_dirty_upload ? "开" : "关", t->tex_dyn_slots ? "开" : "关", t->gpu_ts_segment ? "GPU 起止" : "整次提交", t->draw_barriers_game ? "按游戏屏障" : "全屏障", t->present_display ? "按显示" : "按游戏",
             t->fps_hold ? "开" : "关", t->vconv_range ? "开" : "关", *t->alpha_from_red ? "、单通道补 alpha 着色器名单有" : "", *t->feedback_snap ? "、反馈快照着色器名单有" : "");
 }
 const s2a_nvn_profile *s2a_nvn_prof(void) {

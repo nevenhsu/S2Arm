@@ -3029,7 +3029,7 @@ void mtl_sub_counter(uint64_t addr, uint32_t type) {
     if ((type == NVN_COUNTER_TYPE_TIMESTAMP || type == NVN_COUNTER_TYPE_TIMESTAMP_TOP) && !seg_ts()) {
         static _Atomic uint64_t same;
         uint64_t n = atomic_fetch_add(&same, 1) + 1;
-        if (n && !(n & (n - 1))) MLOG("counter timestamp reports: %llu so far, %s: reports in one %s read the same time", (unsigned long long)n, ts_mode() == 3 ? "one time per game frame (gpu_timestamps frame)" : "one time per submission (gpu_timestamps submission)", ts_mode() == 3 ? "frame" : "submission");
+        if (n && !(n & (n - 1))) MLOG("counter timestamp reports: %llu so far, one time per submission (gpu_timestamps submission): reports in one submission read the same time", (unsigned long long)n);
     }
     sbw_note(addr, 16, SBW_REPORT); post((post_op){2, NULL, 0, 0, addr, type, NULL, g_seg}); ts_clk();
 }
@@ -3046,10 +3046,9 @@ static uint64_t gpu_ticks(void) { uint64_t g = guest_ns(); if (!g) { struct time
 #define SEG_CLK_N 1024
 struct seg_clk { _Atomic int refs; _Atomic uint64_t t[SEG_CLK_N][2]; uint32_t nb, ncm; uint16_t b[SEG_CLK_N + 1], cm[SEG_CLK_N]; };   // per submission (g_sclk, allocated at its first cut or report): guest ns of each cut segment's GPU start / end (0 = no feedback yet); b: with ts_on, the timestamp heap slots of the segment boundaries, segment k from b[k] to b[k + 1]; cm: the segments that ended a command buffer sub_cut committed, in order (seg_idle_before)
 // 0 one time for the whole submission, 1 segment times without the GPU's idle gaps between command buffers (seg_idle_before), 2 segment times with the gaps kept (DM_NVN_GPU_TS=segment_gaps, for A/B runs), 3 one monotonic time per game frame (gpu_timestamps frame)
-static uint64_t g_ts_frame_id = ~0ull, g_ts_frame_val = 0;
-static int ts_mode(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_GPU_TS"); v = e && *e ? (!strcmp(e, "segment") ? 1 : !strcmp(e, "segment_gaps") ? 2 : !strcmp(e, "frame") ? 3 : 0) : DM_GAME_GPU_TS_FRAME ? 3 : DM_GAME_GPU_TS_SEGMENT ? 1 : 0;
-    MLOG("counter timestamps: %s (profile key gpu_timestamps; DM_NVN_GPU_TS=segment / segment_gaps / submission / frame)", v == 1 ? "GPU start / end time of their segment, without the GPU's idle time between command buffers" : v == 2 ? "GPU start / end time of their segment, the GPU's idle time between command buffers included" : v == 3 ? "one monotonic time per game frame" : "one time for the whole submission"); } return v; }
-static int seg_ts(void) { int m = ts_mode(); return m == 1 || m == 2; }
+static int ts_mode(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_GPU_TS"); v = e && *e ? (!strcmp(e, "segment") ? 1 : !strcmp(e, "segment_gaps") ? 2 : 0) : DM_GAME_GPU_TS_SEGMENT ? 1 : 0;
+    MLOG("counter timestamps: %s (profile key gpu_timestamps; DM_NVN_GPU_TS=segment / segment_gaps / submission)", v == 1 ? "GPU start / end time of their segment, without the GPU's idle time between command buffers" : v == 2 ? "GPU start / end time of their segment, the GPU's idle time between command buffers included" : "one time for the whole submission"); } return v; }
+static int seg_ts(void) { return ts_mode() > 0; }
 static void seg_clk_put(seg_clk *c) { if (c && atomic_fetch_sub(&c->refs, 1) == 1) free(c); }
 static uint64_t gpu_s_guest_ns(double s) {   // a feedback GPU time (seconds on the mach absolute time base) on the guest clock; 0 when unknown
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
@@ -3347,15 +3346,6 @@ uint64_t nvn_be_sub_commit(void) {
     atomic_fetch_add(&g_seg_inflight, 1);
     fb_add(o, ^(id f) { (void)f; atomic_fetch_sub(&g_seg_inflight, 1); for (dispatch_block_t block in commit_blocks) block(); });
     uint64_t gpu_f = atomic_load(&g_cur_frame); double gpu_sub = gpu_tag_begin(gpu_f);
-    uint64_t frame_ts = 0;
-    if (ts_mode() == 3) {
-        if (g_ts_frame_id != gpu_f) {
-            uint64_t now_t = gpu_ticks();
-            if (now_t <= g_ts_frame_val) now_t = g_ts_frame_val + 1;
-            g_ts_frame_id = gpu_f; g_ts_frame_val = now_t;
-        }
-        frame_ts = g_ts_frame_val;
-    }
     NSString *cctx = @(cctx_snap());
     seg_clk *sc = g_sclk; uint32_t seg_last = g_seg; g_sclk = NULL;
     fb_add(o, ^(id<MTL4CommitFeedback> cb) {
@@ -3370,7 +3360,7 @@ uint64_t nvn_be_sub_commit(void) {
                 for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
                 free(l); uint64_t rec[2] = {sum, gpu_ticks()}; memcpy((void *)ops[i].addr, rec, sizeof rec);
             }
-            else { uint64_t t = (frame_ts && (ops[i].type == 0 || ops[i].type == 0x10)) ? frame_ts : rep_ticks(&ops[i], sc, seg_last, c0, c1), rec[2] = {(ops[i].type == 0 || ops[i].type == 0x10) && !DM_GAME_RENDER_COND ? t : 0, t}; memcpy((void *)ops[i].addr, rec, sizeof rec); }   // render_cond: a timestamp report's counter field is 0, as on the GPU (see rc_value)
+            else { uint64_t t = rep_ticks(&ops[i], sc, seg_last, c0, c1), rec[2] = {(ops[i].type == 0 || ops[i].type == 0x10) && !DM_GAME_RENDER_COND ? t : 0, t}; memcpy((void *)ops[i].addr, rec, sizeof rec); }   // render_cond: a timestamp report's counter field is 0, as on the GPU (see rc_value)
         }
         free(ops); seg_clk_put(sc);
         pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);

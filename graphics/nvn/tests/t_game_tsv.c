@@ -26,10 +26,8 @@ int main(int argc, char **argv) {
     s2a_game_tsv_parse("draw_barriers\tsome\n", &g, err, sizeof err);
     CK(!g.draw_barriers_game && *err, "draw_barriers 值看不懂：报错、按缺省 full（实得 %d「%s」）", g.draw_barriers_game, err);
 
-    s2a_game_tsv_parse("gpu_timestamps\tframe\n", &g, err, sizeof err);
-    CK(!g.gpu_ts_segment && g.gpu_ts_frame && !*err, "gpu_timestamps frame：每帧同刻、关闭段内起止");
     s2a_game_tsv_parse("gpu_timestamps\tbad\n", &g, err, sizeof err);
-    CK(g.gpu_ts_segment == 1 && !g.gpu_ts_frame && *err, "gpu_timestamps 值看不懂：报错、按缺省 segment（实得 %d/%d「%s」）", g.gpu_ts_segment, g.gpu_ts_frame, err);
+    CK(g.gpu_ts_segment == 1 && *err, "gpu_timestamps 值看不懂：报错、按缺省 segment（实得 %d「%s」）", g.gpu_ts_segment, err);
 
     s2a_game_tsv_parse(NULL, &g, err, sizeof err);
     CK(g.render_cond && g.gpu_ts_segment && !*err, "没有文件（NULL）同空档");

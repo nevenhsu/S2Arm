@@ -161,7 +161,6 @@ static int nvn_be_shutdown_session_body(void) {
     if (g_gmem_buf && g_gmem_cur_slot < 0) res_remove(g_gmem_buf);
     g_gmem_buf = nil; g_gmem_cpu = nil; g_gmem_gen = g_gmem_built_rgen = 0; g_gmem_cur_slot = -1; g_gmem_built_on = -1;
     g_last_end_relaxed = 0; g_game_barrier = 0; main_barrier_reset();
-    g_ts_frame_id = ~0ull; g_ts_frame_val = 0;
     atomic_fetch_add(&g_pool_gen, 1); atomic_fetch_add(&g_gmem_pgen, 1); atomic_fetch_add(&g_reg_gen, 1); atomic_fetch_add(&g_ser_gen, 1);
     // Keys for these caches include program/guest buffer identity. Reuse only
     // the compiled shader cache (its keys are content hashes).
