@@ -871,12 +871,12 @@ private struct AppKitPopover<Content: View>: NSViewRepresentable {
             c.host = host; c.popover = popover
             DispatchQueue.main.async { [weak view] in
                 guard let view, view.window != nil, c.popover === popover else { return }
-                popover.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)   // 按钮下方
+                LauncherWindowPresenter.current.showPopover(popover, view.bounds, view, .minY)   // 按钮下方
             }
         } else if let popover = c.popover {
             c.requested = true
-            popover.performClose(nil)
+            LauncherWindowPresenter.current.closePopover(popover)
         }
     }
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.popover?.close() }
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { if let popover = coordinator.popover { LauncherWindowPresenter.current.dismissPopover(popover) } }
 }

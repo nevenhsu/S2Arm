@@ -396,7 +396,7 @@ struct InputSettingsSheet: View {
         panel.title = t("manage.import")
         panel.allowedContentTypes = [.json]
         panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         recording = nil
         switch InputConfig.imported(from: url) {
         case .success(let imported): config = imported; failure = nil
@@ -411,7 +411,7 @@ struct InputSettingsSheet: View {
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = t("manage.export.fileName") + ".json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         do { try config.exportData().write(to: url, options: .atomic); failure = nil }
         catch { failure = t("manage.export.err").replacingOccurrences(of: "{0}", with: error.localizedDescription) }
     }

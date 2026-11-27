@@ -20,9 +20,9 @@ DP() { "$PY" "$H/pack/oneclick/deliver_pack.py" "$@"; }
 mk $T/s a.bin:AAA b.bin:BBBB sub/c.bin:CC
 o1=$(DP $T/s $T/d); r1=$?
 ck "① 整份：rc=${r1}、输出「${o1}」" '[ $r1 = 0 ] && [ "$(cut -f3,4,5 <<< "$o1")" = "3	0	整份" ] && same $T/s $T/d'
-ib=$(stat -f %i $T/d/b.bin 2> /dev/null || stat -c %i $T/d/b.bin)
+ib=$(stat -c %i $T/d/b.bin 2> /dev/null || stat -f %i $T/d/b.bin)
 mk $T/s a.bin:AAAX b.bin:BBBB d.bin:DDDDD
-o2=$(DP $T/s $T/d); r2=$?; ib2=$(stat -f %i $T/d/b.bin 2> /dev/null || stat -c %i $T/d/b.bin)
+o2=$(DP $T/s $T/d); r2=$?; ib2=$(stat -c %i $T/d/b.bin 2> /dev/null || stat -f %i $T/d/b.bin)
 ck "② 增量：rc=${r2}、输出「${o2}」、b.bin inode ${ib} → ${ib2}、sub/ $([ -e $T/d/sub ] && echo 还在 || echo 没了)" \
   '[ $r2 = 0 ] && [ "$(cut -f1,3,4,5 <<< "$o2")" = "3	2	1	增量" ] && [ "$ib" = "$ib2" ] && [ ! -e $T/d/sub ] && same $T/s $T/d'
 printf 'B' > $T/d/b.bin; o3=$(DP $T/s $T/d); r3=$?

@@ -69,7 +69,7 @@ import NXLauncher
             let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: systems, lang: "zh", maxHeight: cap)
                 .environment(\.padControls, navigation))
             let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 380, height: 900), styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             defer { window.close() }
             for _ in 0..<3 { host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(60)) }
             window.setContentSize(host.fittingSize); host.layoutSubtreeIfNeeded()
@@ -114,7 +114,7 @@ import NXLauncher
             let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: systems, lang: "zh")
                 .environment(\.padControls, navigation))
             let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             defer { window.close() }
             host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(80))
             navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
@@ -154,7 +154,7 @@ import NXLauncher
                     .environment(\.padControls, navigation))
                 let size = host.fittingSize
                 let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: size), styleMask: [.borderless], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+                window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
                 defer {
                     window.close(); defaults.removePersistentDomain(forName: suite)
                     try? FileManager.default.removeItem(at: order)
@@ -278,7 +278,7 @@ import NXLauncher
         let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), lang: "en")
             .environment(\.padControls, navigation))
         let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         defer { window.close() }
         navigation.source.controllers = { [] }
         navigation.attach(window); defer { navigation.detach() }
@@ -308,7 +308,7 @@ import NXLauncher
         let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), lang: "zh")
             .environment(\.padControls, navigation))
         let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         navigation.source.controllers = { [] }
         navigation.attach(window); navigation.source.stop(); navigation.source.isActive = { true }
         host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(100))

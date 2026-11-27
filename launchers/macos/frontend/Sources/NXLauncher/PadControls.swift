@@ -28,6 +28,9 @@ package struct PadControl {
     package var ringOutset: CGFloat = 0
     /// Only answers its shortcuts (e.g. B closes a nested menu); never a focus target, never hides AX controls under it.
     package var shortcutOnly = false
+    /// 鼠标点它执行的动作，只有与 activate（手柄 A）不同时才给（如首页搜索钮：鼠标原位展开、A 开屏幕键盘）；nil = 同 activate。
+    ///   单测不上屏、不接合成鼠标事件，「鼠标点了它」经这里走（LauncherPadNavigation.pointerActivate），与按钮自己的动作是同一个函数
+    package var pointer: (() -> Void)? = nil
 }
 /// Identifiers of controls the controller navigation skips, including its accessibility fallback.
 @MainActor package enum PadExclusion { package static var ids: Set<String> = [] }
@@ -100,8 +103,8 @@ extension View {
     package func controllerConnectedOnly() -> some View { modifier(PadConnectedOnlyModifier()) }
     package func controllerButtonStyle<S: ButtonStyle>(_ style: S) -> some View { buttonStyle(PadVisualButtonStyle(style: style)) }
     package func controllerButtonStyle<S: PrimitiveButtonStyle>(_ style: S) -> some View { buttonStyle(PadPrimitiveButtonStyle(style: style)) }
-    package func controllerControl(id: String? = nil, activate: @escaping () -> Void, adjust: ((Int) -> Void)? = nil) -> some View {
-        modifier(PadControlModifier(explicitID: id, activate: activate, adjust: adjust))
+    package func controllerControl(id: String? = nil, activate: @escaping () -> Void, adjust: ((Int) -> Void)? = nil, pointer: (() -> Void)? = nil) -> some View {
+        modifier(PadControlModifier(explicitID: id, activate: activate, adjust: adjust, pointer: pointer))
     }
 }
 private struct PadVisualButtonStyle<Style: ButtonStyle>: PrimitiveButtonStyle {
@@ -162,6 +165,7 @@ private struct PadControlModifier: ViewModifier {
     var explicitID: String?
     let activate: () -> Void
     var adjust: ((Int) -> Void)?
+    var pointer: (() -> Void)? = nil
     var styleRadius: CGFloat? = nil
     var styleOutset: CGFloat = 0
     var forcedShortcuts: [PadShortcut]? = nil
@@ -182,7 +186,7 @@ private struct PadControlModifier: ViewModifier {
                 PadControlFrame(registry: registry, id: explicitID ?? identifier ?? "control." + token.uuidString,
                     scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred && !shortcutOnly, shortcuts: forcedShortcuts ?? shortcuts,
                     shortcutsRequireFocus: shortcutsRequireFocus, ringRadius: ringRadius ?? styleRadius,
-                    ringOutset: ringRadius == nil ? styleOutset : (ringOutsetOverride ?? 0), shortcutOnly: shortcutOnly)
+                    ringOutset: ringRadius == nil ? styleOutset : (ringOutsetOverride ?? 0), shortcutOnly: shortcutOnly, pointer: pointer)
             }
         }
     }
@@ -200,6 +204,7 @@ private struct PadControlFrame: NSViewRepresentable {
     let ringRadius: CGFloat?
     let ringOutset: CGFloat
     let shortcutOnly: Bool
+    var pointer: (() -> Void)? = nil
     final class Host: NSView {
         weak var registry: (any PadControlRegistry)?
         // SwiftUI can overlap old and new hosts during a button-style update.
@@ -212,7 +217,7 @@ private struct PadControlFrame: NSViewRepresentable {
     func updateNSView(_ view: Host, context: Context) {
         if let previous = view.registry, previous !== registry { previous.removeControl(view.token) }
         view.registry = registry
-        registry?.register(PadControl(token: view.token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts, shortcutsRequireFocus: shortcutsRequireFocus, ringRadius: ringRadius, ringOutset: ringOutset, shortcutOnly: shortcutOnly))
+        registry?.register(PadControl(token: view.token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts, shortcutsRequireFocus: shortcutsRequireFocus, ringRadius: ringRadius, ringOutset: ringOutset, shortcutOnly: shortcutOnly, pointer: pointer))
     }
     static func dismantleNSView(_ view: Host, coordinator: ()) {
         view.registry?.removeControl(view.token)

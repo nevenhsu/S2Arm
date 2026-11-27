@@ -193,7 +193,7 @@ struct ExportView: View {
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         panel.prompt = x("location.choose")
         if !location.isEmpty { panel.directoryURL = URL(fileURLWithPath: location, isDirectory: true) }
-        if panel.runModal() == .OK, let url = panel.url { selectLocation(url.path); model.loadLocations(probe: url.path) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { selectLocation(url.path); model.loadLocations(probe: url.path) }
     }
 
 

@@ -2,15 +2,17 @@
 # macOS 专有命令用法检查（shell_lint_test.sh 调用）：cp -c（APFS 克隆）、stat -f（BSD 格式串）、sed -i ''（BSD 原地改）在 Linux 上
 #   要么不认、要么语义不同。贡献者在 Linux 上跑一键出包 / 单测时才暴露（11-01：oneclick.sh 交付拷贝 cp -c / cp -cR，#1042 贴出 5 条不通）。
 # 合格写法（同一行）：带退回（`if ! cp -c …; then cp …` 或 `cp -c … 2> /dev/null || cp …`），或写在 Darwin 判断里（行里有 Darwin）。
+#   stat -f 例外：退回只在 GNU 写法在前时才算（`stat -c … 2> /dev/null || stat -f …`），见 line_issues
 # 只在 Mac 上跑的存量脚本按文件登记在 tests/macos_only_ok.tsv（路径<TAB>理由）；登记了却已没有这类用法 → 报过期。
 import os
 import re
 import subprocess
 import sys
 
+STAT_F = re.compile(r"\bstat\s+-f\b")
 PATTERNS = (
     (re.compile(r"\bcp\s+-[A-Za-z]*c[A-Za-z]*\b"), "cp -c（APFS 克隆）"),
-    (re.compile(r"\bstat\s+-f\b"), "stat -f（BSD 格式串，GNU 是文件系统信息）"),
+    (STAT_F, "stat -f（BSD 格式串，GNU 是文件系统信息、失败前先往标准输出打一段；退回要 GNU 写法在前：stat -c … 2> /dev/null || stat -f …）"),
     (re.compile(r"""\bsed\s+-i\s*(''|"")"""), "sed -i ''（BSD 原地改，GNU 把 '' 当文件）"),
 )
 NO_FALLBACK = r"(?:die|exit|return|fail|echo|true|:)\b"
@@ -23,9 +25,22 @@ def line_issues(line):
         return []
     code = line.split(" # ", 1)[0]
     hits = [name for pat, name in PATTERNS if pat.search(code)]
-    if not hits or "Darwin" in code or FALLBACK.search(code):
+    if not hits or "Darwin" in code:
         return []
-    return hits
+    fb = bool(FALLBACK.search(code))
+    out = []
+    for pat, name in PATTERNS:
+        if name not in hits:
+            continue
+        if pat is STAT_F:
+            # stat -f 的退回只在 GNU 写法在前时才算（11-26：GNU 的 stat -f 先往标准输出打一整段文件系统信息再退 1，
+            #   $(stat -f %m f 2> /dev/null || stat -c %Y f) 拿到「文件系统信息 + 修改时间」，前后两次永远不等，gate_route_test 在 Linux 上因此红）。
+            #   合格：stat -c … 2> /dev/null || stat -f …（BSD 的 stat 不认 -c、不打标准输出，退回干净）
+            if not (fb and re.search(r"\bstat\s+-c\b", code[:pat.search(code).start()])):
+                out.append(name)
+        elif not fb:
+            out.append(name)
+    return out
 
 
 def lint_text(text):

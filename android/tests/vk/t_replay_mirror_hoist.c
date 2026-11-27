@@ -10,6 +10,10 @@
 __typeof__(backend_fixture_flag) nvn_plat_flag;
 #include "rp_exec.c"
 #include "nvn_dirty.h"
+#include <sys/mman.h>
+#include <unistd.h>
+#include <signal.h>
+#include <stdatomic.h>
 
 static nvn_gpu_err test_err;
 static int hoist, pass_open, passes;
@@ -25,7 +29,18 @@ int nvn_plat_flag(const char *key, int dflt) {
     return backend_fixture_flag(key, dflt);
 }
 
-void dm_fault_hook_register(int (*fn)(void *, int, void *)) { REQUIRE(fn != NULL); }
+static int (*dirty_fault)(void *, int, void *);
+void dm_fault_hook_register(int (*fn)(void *, int, void *)) { dirty_fault = fn; REQUIRE(fn); }
+// 只允许完成回调写入本臂指定的物理字时认领一次缺页。宿主可能把受保护
+// 的写报告为 MAPERR 或 ACCERR，交给真实脏页钩子判定它是否能释放这页。
+static _Atomic(uintptr_t) landing_word;
+static void alias_page_fault(int sig, siginfo_t *info, void *context) {
+    uintptr_t address = (uintptr_t)info->si_addr;
+    if (info->si_code > 0 && address && dirty_fault &&
+        atomic_compare_exchange_strong(&landing_word, &address, 0) &&
+        dirty_fault(info->si_addr, 1, context)) return;
+    _Exit(128 + sig);
+}
 void dm_guest_write_prep_register(void (*fn)(void *, size_t)) { prepare_write = fn; }
 
 // 本夹具不录计数器报告、调试转储或贴图快照。若意外进入其失败/回落路径，直接报错。
@@ -92,13 +107,127 @@ static void commit_mirror(void) {
     REQUIRE(rp_fence_done(fence) && !nvn_gpu_fence_failed());
 }
 
+static void copy_guest_word(const uint32_t *word, nvn_gpu_buf out, uint64_t offset) {
+    nvn_gpu_buf src = NULL;
+    uint64_t src_off = 0;
+    REQUIRE(rp_buf_resolve(g_cmd, (uintptr_t)word, sizeof *word, &src, &src_off));
+    nvn_gpu_copy_buf(g_cmd, src, src_off, out, offset, sizeof *word);
+}
+
+static void check_alias_direction(const char *name, uint32_t *writer, uint32_t *reader,
+                                  const uint32_t *guard, uint32_t *physical, int gpu, uint32_t marker,
+                                  nvn_gpu_buf readback) {
+    const size_t word = sizeof *writer;
+    // 提前把两端的旧值读到 GPU；首次分配时从 CPU 上传不能充当别名同步。
+    nvn_be_sub_begin();
+    copy_guest_word(writer, readback, 0);
+    copy_guest_word(reader, readback, word);
+    commit_mirror();
+    const uint8_t *bytes = nvn_gpu_buf_cpu(readback);
+    uint32_t seen[3];
+    REQUIRE(bytes);
+    memcpy(seen, bytes, 2 * word);
+    REQUIRE(seen[0] == 0 && seen[1] == 0);
+    nvn_be_sub_begin();
+    if (gpu) {
+        nvn_gpu_buf dst = NULL;
+        uint64_t off = 0;
+        REQUIRE(rp_buf_resolve(g_cmd, (uintptr_t)writer, word, &dst, &off));
+        REQUIRE(rp_post_gpu_write((uintptr_t)writer, word));
+        CHECK(rp_buf_gpu_pending((uintptr_t)reader, word) && !rp_buf_gpu_pending((uintptr_t)guard, word),
+              "%s: pending write range did not follow the mapped physical word", name);
+        nvn_gpu_fill_buf(g_cmd, dst, off, word, marker);
+    } else {
+        prepare_write(writer, word);
+        *writer = marker;
+        REQUIRE(*reader == marker);  // 先证两 CPU VA 确实指向同一文件页。
+    }
+    copy_guest_word(reader, readback, 0);
+    copy_guest_word(writer, readback, word);  // 同地址正控
+    copy_guest_word(guard, readback, 2 * word);  // 另一物理页、同页内偏移
+    if (gpu) {
+        REQUIRE(*physical == 0);  // GPU 写尚未提交，别名读回不能从客体内存取得 marker。
+        atomic_store(&landing_word, (uintptr_t)physical);
+    }
+    commit_mirror();
+    atomic_store(&landing_word, 0);
+    memcpy(seen, bytes, sizeof seen);
+    printf("VPOOL_ALIAS arm=%s expected=%08x cross=%08x same=%08x guard=%08x landed=%08x\n",
+           name, marker, seen[0], seen[1], seen[2], *reader);
+    CHECK(seen[0] == marker, "%s: GPU read stale bytes through alias", name);
+    CHECK(seen[1] == marker && seen[2] == 0x71717171 && *reader == marker,
+          "%s: same-address read, disjoint guard or CPU landing failed", name);
+}
+
+static void test_aligned_aliases(void) {
+    const size_t page = nvn_dirty_page_size();
+    FILE *file = tmpfile();
+    REQUIRE(file && !ftruncate(fileno(file), 2 * page));
+    uint32_t *phys = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), 0);
+    uint32_t *va = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), page);
+    uint32_t *vb = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), page);
+    REQUIRE(phys != MAP_FAILED && va != MAP_FAILED && vb != MAP_FAILED);
+    struct sigaction action = {.sa_sigaction = alias_page_fault, .sa_flags = SA_SIGINFO}, old_action;
+    REQUIRE(atomic_is_lock_free(&landing_word));
+    sigemptyset(&action.sa_mask);
+    REQUIRE(!sigaction(SIGSEGV, &action, &old_action));
+    uint32_t *mapped = phys + page / sizeof *phys;
+    memset(phys, 0x71, page);
+    mapped[0] = 0x12345678;
+    REQUIRE(va[0] == mapped[0] && vb[0] == mapped[0]);
+    // 对齐 MapVirtual 的回放入口：物理池登记脏页，两个虚拟 run 各有独立 VA。
+    REQUIRE(nvn_dirty_log_configure(1));
+    nvn_be_pool_add(phys, 2 * page);
+    nvn_dirty_add_range(phys, 2 * page);
+    REQUIRE(rp_buf_alias_set((uintptr_t)va, page, (uintptr_t)mapped));
+    nvn_be_pool_add(va, page);
+    REQUIRE(rp_buf_alias_set((uintptr_t)vb, page, (uintptr_t)mapped));
+    nvn_be_pool_add(vb, page);
+    REQUIRE(prepare_write && nvn_dirty_tracked(phys, 2 * page));
+    nvn_gpu_buf out = make_buf(3 * sizeof *phys, NVN_GPU_MEM_SHARED, NULL);
+    REQUIRE(out);
+    check_alias_direction("gpu-virtual-physical", va + 1, mapped + 1, phys + 1, mapped + 1, 1, 0x23456781, out);
+    check_alias_direction("gpu-physical-virtual", mapped + 2, vb + 2, phys + 2, mapped + 2, 1, 0x34567812, out);
+    check_alias_direction("gpu-virtual-virtual", va + 3, vb + 3, phys + 3, mapped + 3, 1, 0x45678123, out);
+    check_alias_direction("cpu-virtual-physical", vb + 4, mapped + 4, phys + 4, mapped + 4, 0, 0x56781234, out);
+    check_alias_direction("cpu-physical-virtual", mapped + 5, va + 5, phys + 5, mapped + 5, 0, 0x67812345, out);
+    // 将一个别名改映到物理第一页，另一个仍映到第二页。批量解析和单段解析都读实字节。
+    REQUIRE(mmap(vb, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fileno(file), 0) == vb);
+    REQUIRE(rp_buf_alias_set((uintptr_t)vb, page, (uintptr_t)phys));
+    uint64_t addr[] = {(uintptr_t)(vb + 2), (uintptr_t)(va + 2)};
+    const uint64_t len[] = {4, 4};
+    nvn_gpu_buf bufs[2];
+    uint64_t offsets[2];
+    unsigned char ok[2];
+    nvn_be_sub_begin();
+    REQUIRE(rp_buf_resolve_multi(2, addr, len, bufs, offsets, ok) && ok[0] && ok[1]);
+    for (int i = 0; i < 2; i++) nvn_gpu_copy_buf(g_cmd, bufs[i], offsets[i], out, 4 * i, 4);
+    commit_mirror();
+    uint32_t remapped[2];
+    memcpy(remapped, nvn_gpu_buf_cpu(out), sizeof remapped);
+    printf("VPOOL_ALIAS remap expected=71717171,34567812 actual=%08x,%08x\n", remapped[0], remapped[1]);
+    CHECK(remapped[0] == 0x71717171 && remapped[1] == 0x34567812, "alias remap changed the other alias");
+    CHECK(!nvn_unimpl_kinds(), "alias: replay reported unsupported calls");
+    nvn_gpu_buf_release(out, NULL, NULL);
+    REQUIRE(rp_buf_alias_set((uintptr_t)vb, page, 0));
+    REQUIRE(rp_buf_alias_set((uintptr_t)va, page, 0));
+    nvn_be_pool_del(vb);
+    nvn_be_pool_del(va);
+    nvn_be_pool_del(phys);
+    nvn_dirty_remove_range(phys);
+    REQUIRE(!munmap(vb, page) && !munmap(va, page) && !munmap(phys, 2 * page));
+    REQUIRE(!fclose(file));
+    REQUIRE(!sigaction(SIGSEGV, &old_action, NULL));
+}
+
 int main(int argc, char **argv) {
     REQUIRE(argc == 3);
     const char *arm = argv[2];
     const int overlap = !strcmp(arm, "overlap");
     const int pending = !strcmp(arm, "pending");
     const int off = !strcmp(arm, "off");
-    REQUIRE(overlap || pending || off || !strcmp(arm, "gap"));
+    const int alias = !strcmp(arm, "alias");
+    REQUIRE(alias || overlap || pending || off || !strcmp(arm, "gap"));
     hoist = !off;
     char why[256] = {0};
     REQUIRE(!s2a_vk_device_create(&g_dev, why, sizeof why));
@@ -106,6 +235,13 @@ int main(int argc, char **argv) {
     g_desc.host_device = &g_dev;
     g_desc.app_label = "replay-mirror-hoist";
     REQUIRE(open_backend());
+
+    if (alias) {
+        test_aligned_aliases();
+        CHECK(OK(nvn_gpu_close(5000000000ull, &test_err)), "backend close failed: %s", test_err.why);
+        CHECK(!s2a_vk_device_destroy(&g_dev, 1), "device destroy failed");
+        return g_fail ? 1 : 0;
+    }
 
     const size_t page = nvn_dirty_page_size(), bytes = 8 * page;
     uint8_t *guest = NULL;

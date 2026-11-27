@@ -110,7 +110,7 @@ import NXLauncher
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 500, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: content.environment(\.padControls, navigation))
-        window.orderBack(nil); window.contentView?.layoutSubtreeIfNeeded()
+        UIStage.show(window); window.contentView?.layoutSubtreeIfNeeded()
         navigation.attach(window)
         return window
     }

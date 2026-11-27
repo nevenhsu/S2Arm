@@ -159,8 +159,10 @@ for backend in mtl3 mtl4; do
                 #   门禁存下的只有红摘要。行首用「✗」：两条路径的摘要都认它——graphics/gate.sh evidence 摘 ^(✗ |不通 |FAIL) 前 20 行，
                 #   作为单测（tests/present_settings_test.sh）时 tools/gate.sh 摘 ^(不通|✗) 前 10 行；「FAIL: 」与【红】那几行名额会被编译命令文本占掉
                 printf '✗ %s（exit=%s）\n' "$name" "$status" >&2
+                /usr/bin/grep -a '^【卡】' "$runtime/run.log" 2> /dev/null | head -n 3 | cut -c1-600 | sed "s/^/✗ 卡 ${name}｜/" >&2
                 [[ ! -s "$runtime/stuck.sample" ]] || awk "$stuck_awk" "$runtime/stuck.sample" | cut -c1-220 | sed "s/^/✗ 栈 ${name}｜/" >&2
-                tail -n 6 "$runtime/run.log" 2> /dev/null | sed "s/^/✗ 尾 ${name}｜/" >&2; fi
+                # 末 6 行去掉每 10 秒一条的心跳 / 能耗（卡死格里它们占满 6 行、把卡住前的最后一步挤掉）
+                /usr/bin/grep -av '^\[s2a\] \[心跳\]\|^\[s2a\] \[能耗\]' "$runtime/run.log" 2> /dev/null | tail -n 6 | sed "s/^/✗ 尾 ${name}｜/" >&2; fi
         done
     done
 done

@@ -61,7 +61,7 @@
 #include "spirv_compliance.h"   // #1865 统一装载闸：能力 / 扩展 / 存储类字节声明扫描
 #include "../capprobe/capprobe.h"
 #include "direct/sha256.h"
-_Static_assert(NVN_GPU_CONTRACT_VERSION == 25, "核对 Vulkan 后端与新版 NVN GPU 契约");
+_Static_assert(NVN_GPU_CONTRACT_VERSION == 26, "核对 Vulkan 后端与新版 NVN GPU 契约");
 #include "nvn_vk_dq.inc"   // 两级回放：从这里往下 vkCmd* 等名字走它的包装（调试开关 nvk_dq，缺省开）
 // 宿主后端夹具可能不链回放布局；缺来源时能力关闭并明确报原因。
 // 弱链接[androiddraw]：nvn_deswizzle_geom
@@ -7529,7 +7529,19 @@ static int nvn_fmt_alpha_reads_one(uint32_t f) {
     }
 }
 
-nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err) {
+static int exact_color_view(const struct nvn_gpu_tex_s *t, uint32_t nvn_format, VkFormat fmt) {
+    nvn_fmt_info base, view;
+    uint8_t map[4];
+    // Vulkan 非压缩颜色视图按纹素位数分兼容类；NVN 映射表没有独立类的纯 alpha 或多平面格式。
+    return t->samples == 1 && (t->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
+        nvn_fmt_info_of(t->nvn_format, &base) && nvn_fmt_info_of(nvn_format, &view) &&
+        !base.depth && !base.stencil && !view.depth && !view.stencil && !base.expand && !view.expand &&
+        base.bw == 1 && base.bh == 1 && view.bw == 1 && view.bh == 1 && base.bytes == view.bytes &&
+        !nvn_vk_format_chanmap(t->nvn_format, map) && !nvn_vk_format_chanmap(nvn_format, map) &&
+        (nvn_gpu_format_caps(nvn_format) & NVN_GPU_FMT_RENDER) && tex_fmt_allowed(t, fmt);
+}
+
+static nvn_gpu_rc view_create(nvn_gpu_tex th, const view_t *v, int color_attachment, nvn_gpu_view *out, nvn_gpu_err *err) {
     if (!session_accepting()) return fail(err, NVN_GPU_E_STOPPED, "会话正在关闭 / 未打开");
     if (!out) return fail(err, NVN_GPU_E_ARG, "out 为空");
     *out = NULL;
@@ -7566,6 +7578,15 @@ nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *ou
     if (!plan.ok) return fail(err, NVN_GPU_E_ARG, "%s", plan.why);
     base_level = plan.base_level; levels = plan.nlevels;
     base_layer = plan.base_layer; layers = plan.nlayers; type = plan.type;
+    if (color_attachment) {
+        const uint32_t want = v && v->set_format ? (uint32_t)v->format : t->nvn_format;
+        if (type != VK_IMAGE_VIEW_TYPE_2D || levels != 1 || layers != 1 || !exact_color_view(t, want, fmt))
+            return fail(err, NVN_GPU_E_UNSUPPORTED, "颜色附件需要兼容且可直接使用的单级单层格式 0x%x → 0x%x", t->nvn_format, want);
+        if (t->target == NVN_TEXTURE_TARGET_3D) {
+            uint32_t depth = base_level < 32 ? t->depth >> base_level : 0;
+            if (base_layer >= (depth ? depth : 1)) return fail(err, NVN_GPU_E_ARG, "颜色附件切片 %u 超出 mip %u 深度", base_layer, base_level);
+        }
+    }
     int fmt_fell_back = 0, rb_swap = 0;
     if (!tex_fmt_allowed(t, fmt)) {
         VkFormat sub = rb_swap_stand_in(t, fmt);
@@ -7604,7 +7625,7 @@ nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *ou
     // 通道映射：视图自己设了就用视图的，否则用存储自带的（与 nvn_mtl.m:6546 同序，是取代不是叠加）。
     // NVN 的取值 0 零 / 1 一 / 2 R / 3 G / 4 B / 5 A，其它值按该通道恒等。
     // #975：16 位打包格式走退回格式时，NVN 的分量 c 在 Vulkan 格式里是第 fmap[c] 个分量，再叠在上面这一层之下。
-    {
+    if (!color_attachment) {
         uint8_t fmap[4];
         o->p16_remap = nvn_vk_format_chanmap(o->nvn_format, fmap);
         if (rb_swap) { uint8_t r = fmap[0]; fmap[0] = fmap[2]; fmap[2] = r; }   // RGBA ↔ BGRA 替代视图（rb_swap_stand_in）：NVN 的 R 取存储的 B
@@ -7622,7 +7643,12 @@ nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *ou
         }
         if (!o->swizzled) memset(&ci.components, 0, sizeof ci.components);   // 恒等：留 IDENTITY，附件可用
     }
-    VkImageViewUsageCreateInfo vu; ci.pNext = view_usage_next(t, ci.format, &vu);
+    VkImageViewUsageCreateInfo vu;
+    if (color_attachment) {
+        vu = (VkImageViewUsageCreateInfo){.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
+                                        .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
+        ci.pNext = &vu;  // 重解释只用于附件，不能继承视图格式可能不支持的存储等用途。
+    } else ci.pNext = view_usage_next(t, ci.format, &vu);
     OC(OC_VIEW);
     if (vkCreateImageView(g.d, &ci, NULL, &o->view) != VK_SUCCESS) {
         free(o);
@@ -7640,6 +7666,14 @@ nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *ou
     pthread_mutex_unlock(&g_mu);
     *out = o;
     return rc(NVN_GPU_OK);
+}
+
+nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err) {
+    return view_create(th, v, 0, out, err);
+}
+
+nvn_gpu_rc nvn_gpu_view_create_color_attachment(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err) {
+    return view_create(th, v, 1, out, err);
 }
 
 nvn_gpu_rc nvn_gpu_view_create_buf(nvn_gpu_buf b, uint64_t off, uint64_t bytes, uint32_t fmt, nvn_gpu_view *out, nvn_gpu_err *err) {

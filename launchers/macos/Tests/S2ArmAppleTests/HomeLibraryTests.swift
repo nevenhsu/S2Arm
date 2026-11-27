@@ -68,7 +68,7 @@ import LauncherPadBridge
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1120, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        window.orderBack(nil)
+        UIStage.show(window)
         model.selectedID = String(format: "%016X", 1)
         XCTAssertEqual(model.games.first { $0.id == String(format: "%016X", 2) }?.iphoneDaysLeft(), 6)
         XCTAssertNil(model.games.first { $0.id == String(format: "%016X", 3) }?.iphoneDaysLeft(), "没装过的款没有到期提示")
@@ -100,7 +100,7 @@ import LauncherPadBridge
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        window.orderBack(nil)
+        UIStage.show(window)
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(300))
         host.layoutSubtreeIfNeeded()
@@ -228,7 +228,7 @@ import LauncherPadBridge
             game.banner = banner
             let host = NSHostingView(rootView: HomeBackdrop(game: game, covers: covers))
             let window = NSWindow(contentRect: NSRect(x: 50, y: 50, width: 1000, height: 720), styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             host.layoutSubtreeIfNeeded()
             let color = try await waitPixel(host, x: 0.88, y: 0.5) { $0.greenComponent > $0.redComponent + 0.15 }
             XCTAssertGreaterThan(color.greenComponent, color.redComponent + 0.15, "banner 缺失或无法解码时仍显示有效封面")
@@ -239,7 +239,7 @@ import LauncherPadBridge
         custom.banner = root.appendingPathComponent("banner-red.png").path
         let host = NSHostingView(rootView: HomeBackdrop(game: custom, covers: covers))
         let window = NSWindow(contentRect: NSRect(x: 50, y: 50, width: 1000, height: 720), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         host.layoutSubtreeIfNeeded()
         let color = try await waitPixel(host, x: 0.88, y: 0.5) { $0.greenComponent > $0.redComponent + 0.15 }
         XCTAssertGreaterThan(color.greenComponent, color.redComponent + 0.15, "自定义封面优先于自带横幅")

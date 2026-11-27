@@ -4814,6 +4814,7 @@ static uint8_t *vpool_reserve(const pool_t *o) {   // → the reserved range of 
 static void vpool_release(const pool_t *o) {
     vp_lock(); struct vpool *v = vpool_of(o);
     if (v) { vpool_unpublish(v);
+        if (!rp_buf_alias_set((uintptr_t)v->base, v->len, 0)) die("cannot release virtual buffer aliases");
         for (int k = 0; k < v->nrun; k++) nvn_be_pool_del(v->base + v->run[k].lo); vpool_unmap_range(v->base, v->len);
         if (v->lv) { int me; const s2a_lowva_api *lv = vpool_lv(&me); if (lv && me > 0) lv->note(me, -(int64_t)v->len); }
 #if defined(__ANDROID__) || defined(__OHOS__)
@@ -4877,6 +4878,7 @@ static int vsh_make(struct vpool *v, uint64_t off, uint64_t pg) {   // the host 
     if (v->nsh == v->csh) { int c = v->csh ? 2 * v->csh : 16; struct vshp *t = realloc(v->sh, (size_t)c * sizeof *t); if (!t) die("virtual pool copied-page table allocation failed"); v->sh = t; v->csh = c; }
     if (mmap(v->base + off, pg, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0) == MAP_FAILED) { LOG("【红】 virtual pool %p: host page %#llx cannot be made a copy (errno %d): a buffer there stays unaddressable", (const void *)v->pool, (unsigned long long)off, errno); return 0; }
 #if defined(__ANDROID__) || defined(__OHOS__)
+    if (!rp_buf_alias_set((uintptr_t)v->base + off, pg, 0)) die("cannot detach copied buffer page");
     s2a_vp_alias_remove(&v->alias, off, off + pg);   // an alias it replaces: the record goes (as an unmap)
 #endif
     v->sh[v->nsh++] = (struct vshp){off, 0}; vsh_fill(v, v->nsh - 1, pg);
@@ -4954,6 +4956,7 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
         if (mmap((void *)to, r->size, PROT_NONE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0) == MAP_FAILED) { LOG("【红】 virtual pool unmap %#lx+%#llx failed (errno %d)", (unsigned long)to, (unsigned long long)r->size, errno); return 0; }
 #if defined(__ANDROID__) || defined(__OHOS__)
         // 旧别名已被这张不可访问的映射覆盖：先切记录并 unref，源页若已死在这里打洞。
+        if (!rp_buf_alias_set((uintptr_t)v->base + r->voff, r->size, 0)) die("cannot detach virtual buffer alias");
         s2a_vp_alias_remove(&v->alias, (uint64_t)r->voff, (uint64_t)r->voff + r->size);
 #endif
         vrun_set(v, (uint64_t)r->voff, (uint64_t)r->voff + r->size, 0); return 1;
@@ -4976,6 +4979,7 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
 #if defined(__ANDROID__) || defined(__OHOS__)
     // 不论成败都切旧记录：mach.h 的 vm_remap 失败时也会在 dst 补私有 PROT_NONE，
     // 旧别名已经没了，不能留着对旧源页的引用。
+    if (!rp_buf_alias_set((uintptr_t)v->base + r->voff, r->size, 0)) die("cannot detach virtual buffer alias");
     s2a_vp_alias_remove(&v->alias, (uint64_t)r->voff, (uint64_t)r->voff + r->size);
 #endif
     if (kr != KERN_SUCCESS || to != (vm_address_t)(v->base + r->voff)) {
@@ -4995,6 +4999,15 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
         return 0;
     }
 #endif
+    if (!rp_buf_alias_set(to, r->size, from)) {
+        if (mmap((void *)to, r->size, PROT_NONE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0) == MAP_FAILED)
+            die("virtual buffer alias registration failed and dst restore failed");
+        s2a_vp_alias_remove(&v->alias, (uint64_t)r->voff, (uint64_t)r->voff + r->size);
+        vpt_set(v, (uint64_t)r->voff, r->size, NULL);
+        vrun_set(v, (uint64_t)r->voff, (uint64_t)r->voff + r->size, 0);
+        LOG("【红】 virtual pool %p: buffer alias registration failed", (const void *)v->pool);
+        return 0;
+    }
     mprotect((void *)to, r->size, PROT_READ | PROT_WRITE);   // the source may be write-protected by the dirty tracker at this moment; the alias itself is plain memory
     vrun_set(v, (uint64_t)r->voff, (uint64_t)r->voff + r->size, 1);
     uint64_t end = (uint64_t)r->voff + r->size;

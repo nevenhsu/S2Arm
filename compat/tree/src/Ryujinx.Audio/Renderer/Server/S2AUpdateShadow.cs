@@ -337,47 +337,8 @@ namespace Ryujinx.Audio.Renderer.Server
                 shadow.S2AShadowCopyGameFieldsFrom(live);
             }
 
-            // 分频:结构体整拷 + 指针重绑(拷来的链头/_next 指 live,影子段 ClearLinks/Link 顺着写会指进 live——
-            //   渲染拍正在读链,锁外写 live 是撕裂)+ 目的地基底拷贝(落账增量判据)
-            SplitterDestinationVersion1* liveBaseV1 = _liveSplitterContext.S2ADestinationBaseV1;
-            SplitterDestinationVersion2* liveBaseV2 = _liveSplitterContext.S2ADestinationBaseV2;
-            SplitterDestinationVersion1* shadowBaseV1 = null;
-            SplitterDestinationVersion2* shadowBaseV2 = null;
-
-            if (!_shadowDestinationsV2.IsEmpty)
-            {
-                fixed (SplitterDestinationVersion2* p = _shadowDestinationsV2.Span)
-                {
-                    shadowBaseV2 = p;
-                }
-            }
-            else
-            {
-                fixed (SplitterDestinationVersion1* p = _shadowDestinationsV1.Span)
-                {
-                    shadowBaseV1 = p;
-                }
-            }
-
-            for (int i = 0; i < _splitterCount; i++)
-            {
-                SplitterContext.S2AGetState(i) = _liveSplitterContext.S2AGetState(i);
-                SplitterContext.S2AGetState(i).S2ARebindSnapshotPointers(liveBaseV1, liveBaseV2, shadowBaseV1, shadowBaseV2);
-            }
-
-            for (int i = 0; i < _destinationCount; i++)
-            {
-                if (!_shadowDestinationsV2.IsEmpty)
-                {
-                    _shadowDestinationsV2.Span[i] = _liveSplitterContext.S2AGetDestinationV2(i);
-                    _destinationBaseV2.Span[i] = _liveSplitterContext.S2AGetDestinationV2(i);
-                }
-                else
-                {
-                    _shadowDestinationsV1.Span[i] = _liveSplitterContext.S2AGetDestinationV1(i);
-                    _destinationBaseV1.Span[i] = _liveSplitterContext.S2AGetDestinationV1(i);
-                }
-            }
+            // 分频:结构体整拷 + 指针重绑(链头与每个目的地的 _next 都平移到影子数组)+ 目的地基底拷贝,见 SplitterContext.S2ASnapshotFrom
+            SplitterContext.S2ASnapshotFrom(_liveSplitterContext);
 
             _liveMixContext.S2ASnapshotTo(MixContext);
         }

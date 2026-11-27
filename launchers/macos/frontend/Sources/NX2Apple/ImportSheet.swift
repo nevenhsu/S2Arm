@@ -289,7 +289,7 @@ struct ImportSheet: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = page == .selection
         panel.allowsMultipleSelection = page == .selection
-        if panel.runModal() == .OK { accept(panel.urls) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK { accept(panel.urls) }
     }
 
     private func cancel() {
@@ -499,6 +499,6 @@ struct UploadDiagnosticsSheet: View {
         let panel = NSSavePanel()
         let stamp = DateFormatter(); stamp.locale = Locale(identifier: "en_US_POSIX"); stamp.dateFormat = "MMdd-HHmm"
         panel.nameFieldStringValue = "S2Arm-\(BackendText.launcherText("diag.fileWord", language: loc.lang.sharedCode))-\(stamp.string(from: Date())).zip"
-        if panel.runModal() == .OK, let url = panel.url { close(); model.diagnostics(exportTo: url) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { close(); model.diagnostics(exportTo: url) }
     }
 }

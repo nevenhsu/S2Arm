@@ -57,7 +57,7 @@ struct SGradeCard: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
         panel.allowedContentTypes = [.zip, .folder]
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, !panel.urls.isEmpty else { return }
         Task {
             do {
                 let mods = try await model.launchSettingsFull(gameID, modsImport: panel.urls.map(\.path)).5

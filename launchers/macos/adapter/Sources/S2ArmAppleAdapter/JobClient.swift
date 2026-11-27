@@ -183,7 +183,7 @@ public final class JobClient {
         for path in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] where fileManager.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
-        throw JobClientError("找不到 Python，请在设置中指定 Python 3.11 或更新版本。")
+        throw JobClientError("找不到 Python，请在设置中指定 Python 3.12 或更新版本。")
     }
 
     /// 作业入口：应用里是 Resources/Jobs/main.py，源码树里是 <engineDir>/pack/jobs/main.py。

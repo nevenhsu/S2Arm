@@ -91,7 +91,7 @@ struct ExportGameHeader: View {
         panel.title = loc.t("s2arm.custom.cover.help")
         panel.allowedContentTypes = [.jpeg, .png]
         panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         model.customize(game, coverPath: url.path)
     }
 

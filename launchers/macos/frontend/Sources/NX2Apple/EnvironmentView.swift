@@ -319,7 +319,7 @@ struct EnvironmentView: View {
         panel.allowsMultipleSelection = false
         let drive = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
         if FileManager.default.fileExists(atPath: drive.path) { panel.directoryURL = drive }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         do { try model.setCloudFolder(url) } catch { model.reportFailure("s2arm.fail.cloudFolder", error) }   // 剃刀 M13：失败报原因，不再停在旧值像没反应
     }
 
@@ -329,7 +329,7 @@ struct EnvironmentView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         model.importKeys(url)
     }
 
@@ -418,7 +418,7 @@ struct EnvironmentView: View {
         panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.applicationBundle]
         panel.directoryURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         model.setXcode(url)
     }
 
@@ -428,7 +428,7 @@ struct EnvironmentView: View {
         panel.prompt = loc.t("s2arm.library.choosePrompt")
         panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         // 有游戏、选的是空文件夹才问；已有游戏库或含旧产物的文件夹由作业层直接打开 / 认领
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
         // 系统自动生成的文件不算数：同作业层 layout.OS_JUNK / OS_JUNK_PREFIX（三端一份，tests/os_junk_sync_test.sh 核一致）
@@ -440,7 +440,7 @@ struct EnvironmentView: View {
         alert.addButton(withTitle: loc.t("s2arm.library.moveConfirm"))
         alert.addButton(withTitle: loc.t("s2arm.library.moveEmpty"))
         alert.addButton(withTitle: loc.t("fail.confirm.cancel"))
-        switch alert.runModal() {
+        switch LauncherWindowPresenter.current.runAlert(alert) {
         case .alertFirstButtonReturn: model.changeLibrary(to: url, move: true)
         case .alertSecondButtonReturn: model.changeLibrary(to: url)
         default: break

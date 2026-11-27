@@ -111,7 +111,7 @@ struct BatchExportView: View {
                 LauncherDropdown(options: options, selection: model.batchLocation, label: t("location")) { value in
                     if value == "__other__" {
                         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
-                        if panel.runModal() == .OK, let url = panel.url { model.batchLocation = url.path; model.loadLocations(probe: url.path) }
+                        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { model.batchLocation = url.path; model.loadLocations(probe: url.path) }
                     } else { model.batchLocation = value }
                 }
                 .accessibilityIdentifier("batch.location")

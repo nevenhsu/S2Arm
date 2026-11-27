@@ -25,7 +25,7 @@ crash_keep() {
       [ -d "$d" ] || continue
       for f in "$d"/"$proc"*.ips "$d"/"$proc"*.crash; do
         [ -f "$f" ] || continue
-        [ "$(stat -f %m "$f" 2> /dev/null || stat -c %Y "$f" 2> /dev/null || echo 0)" -ge "$t0" ] || continue   # BSD / GNU 两种取修改时刻
+        [ "$(stat -c %Y "$f" 2> /dev/null || stat -f %m "$f" 2> /dev/null || echo 0)" -ge "$t0" ] || continue   # BSD / GNU 两种取修改时刻
         cp "$f" "$dest/" 2> /dev/null && n=$((n + 1))
       done
     done; unset IFS

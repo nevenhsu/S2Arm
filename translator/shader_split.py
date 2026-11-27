@@ -1048,7 +1048,8 @@ def ue_legacy_shaders(path, rel, names, out, key=None):
     pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path, key))
     for name in names:
         d = pk.read(name, decode=oodle)
-        ue_inline_shaders(d, f'/{rel}#{re.sub(r"^(\.\./)+", "", posixpath.normpath(pk.mount + name))}', out)   # pak 内路径一律 /：os.path 在 Windows 上换成 \、前缀 ../ 去不掉（11-05 Windows 出包机勇者斗恶龙 XI S 来源列全是 ..\graphics\，分组全落 *_other）
+        inner = re.sub(r"^(\.\./)+", "", posixpath.normpath(pk.mount + name))   # 反斜杠不进 f-string 表达式：3.12 之前不认（作业层最低 3.11）
+        ue_inline_shaders(d, f'/{rel}#{inner}', out)   # pak 内路径一律 /：os.path 在 Windows 上换成 \、前缀 ../ 去不掉（11-05 Windows 出包机勇者斗恶龙 XI S 来源列全是 ..\graphics\，分组全落 *_other）
 
 ZLIB_HEAD = re.compile(b'\x78[\x01\x5e\x9c\xda]')
 OODLE_HEAD = re.compile(b'[\x8c\xcc][\x06\x0a\x0b\x0c]')

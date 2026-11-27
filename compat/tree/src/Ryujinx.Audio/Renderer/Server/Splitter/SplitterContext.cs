@@ -227,8 +227,41 @@ namespace Ryujinx.Audio.Renderer.Server.Splitter
             Setup(splitters, splitterDestinationsV1, splitterDestinationsV2, live.IsBugFixed);
         }
 
+        // S2Arm (#12/#13 拆分 · 渲染拍不等 Update 的锁): 锁1 快照——live 分频器与目的地整拷进本(影子)上下文,
+        //   链头和每个目的地的 _next 都按下标平移到影子数组,目的地另拷一份基底(落账增量判据)。
+        //   目的地 _next 必须重绑:拷来的指着 live,影子段 SplitterState.Update 的 ClearLinks 顺链走会走进 live、
+        //   在锁外把 live 的链拆掉(渲染拍正在读),落账顺影子链重建时也会穿进 live,连出环(渲染拍在会话锁里
+        //   顺链走不出来:声音全停、即时存档拿不到会话锁)
+        internal unsafe void S2ASnapshotFrom(SplitterContext live)
+        {
+            SplitterDestinationVersion1* liveBaseV1 = live.S2ADestinationBaseV1;
+            SplitterDestinationVersion2* liveBaseV2 = live.S2ADestinationBaseV2;
+            SplitterDestinationVersion1* shadowBaseV1 = S2ADestinationBaseV1;
+            SplitterDestinationVersion2* shadowBaseV2 = S2ADestinationBaseV2;
+
+            for (int i = 0; i < _splitters.Length; i++)
+            {
+                _splitters.Span[i] = live._splitters.Span[i];
+                _splitters.Span[i].S2ARebindSnapshotPointers(liveBaseV1, liveBaseV2, shadowBaseV1, shadowBaseV2);
+            }
+
+            for (int i = 0; i < _splitterDestinationsV2.Length; i++)
+            {
+                _splitterDestinationsV2.Span[i] = live._splitterDestinationsV2.Span[i];
+                _splitterDestinationsV2.Span[i].S2ARebindSnapshotPointers(liveBaseV2, shadowBaseV2);
+                _s2aDestinationBaseV2.Span[i] = live._splitterDestinationsV2.Span[i];
+            }
+
+            for (int i = 0; i < _splitterDestinationsV1.Length; i++)
+            {
+                _splitterDestinationsV1.Span[i] = live._splitterDestinationsV1.Span[i];
+                _splitterDestinationsV1.Span[i].S2ARebindSnapshotPointers(liveBaseV1, shadowBaseV1);
+                _s2aDestinationBaseV1.Span[i] = live._splitterDestinationsV1.Span[i];
+            }
+        }
+
         // S2Arm (#12/#13 拆分 · 渲染拍不等 Update 的锁): 影子分频段→live 的落账。目的地按字段矩阵落账
-        //   (S2ACommitGameFieldsFrom,基底=锁1 快照拷贝);分频器结构体整拷+链重建(S2ACommitGameFieldsFrom)
+        //   (S2ACommitGameFieldsFrom,基底=锁1 快照拷贝);链结构(链头、_next)按下标原样平移回 live
         internal void S2ACommitFrom(SplitterContext shadow)
         {
             if (shadow._splitterDestinationsV2.IsEmpty && shadow._splitterDestinationsV1.IsEmpty)
@@ -255,9 +288,26 @@ namespace Ryujinx.Audio.Renderer.Server.Splitter
                 }
             }
 
-            for (int i = 0; i < _splitters.Length; i++)
+            // 链结构原样照影子:链头与每个目的地的 _next 按下标从影子数组平移回 live(拆分路径 = 原版就地更新的同构拷贝)
+            unsafe
             {
-                _splitters.Span[i].S2ACommitGameFieldsFrom(in shadow._splitters.Span[i], this);
+                SplitterDestinationVersion1* shadowBaseV1 = shadow.S2ADestinationBaseV1, liveBaseV1 = S2ADestinationBaseV1;
+                SplitterDestinationVersion2* shadowBaseV2 = shadow.S2ADestinationBaseV2, liveBaseV2 = S2ADestinationBaseV2;
+
+                for (int i = 0; i < _splitterDestinationsV1.Length; i++)
+                {
+                    _splitterDestinationsV1.Span[i].S2ACommitLinkFrom(in shadow._splitterDestinationsV1.Span[i], shadowBaseV1, liveBaseV1);
+                }
+
+                for (int i = 0; i < _splitterDestinationsV2.Length; i++)
+                {
+                    _splitterDestinationsV2.Span[i].S2ACommitLinkFrom(in shadow._splitterDestinationsV2.Span[i], shadowBaseV2, liveBaseV2);
+                }
+
+                for (int i = 0; i < _splitters.Length; i++)
+                {
+                    _splitters.Span[i].S2ACommitGameFieldsFrom(in shadow._splitters.Span[i], shadowBaseV1, shadowBaseV2, liveBaseV1, liveBaseV2);
+                }
             }
         }
 

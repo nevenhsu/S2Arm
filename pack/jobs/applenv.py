@@ -40,7 +40,7 @@ def machine_get(key):
 def machine_py():
     """开发机在 tools/machine.local 声明的 S2A_PY（同 oneclick.sh）"""
     return machine_get("S2A_PY")
-# 「装了 3.11+ 但 pip 被拒」（uv / Homebrew 的 PEP 668）时的出路；一键出包的报错用同一句
+# 「装了够版本的 Python 但 pip 被拒」（uv / Homebrew 的 PEP 668）时的出路；一键出包的报错用同一句
 VENV = "装不进包（externally-managed / uv 托管）就建个虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"  # 非玩家句
 
 
@@ -163,8 +163,9 @@ def main(argv):
                        f"没有共享字体：一键出包给 --fonts <目录>（S2Arm.app 的 Contents/Resources/Fonts），或装好生成器依赖由出包现做开源替代字体{FONTDEPS}"))  # 非玩家句
     for x in checks:
         if x["name"] == "Python":
-            x["ok"] = toolchain.probe(c, [py, "-c", "import sys; assert sys.version_info >= (3, 11)"])[0]
-            x["message"] = f"用 {py}" if x["ok"] else f"{py} 低于 3.11：装 Python 3.11+ 或装 S2Arm.app（自带钉版 Python），或用 S2A_PYTHON=<解释器> 指定。{VENV}"  # 非玩家句
+            low = ".".join(map(str, toolchain.PYTHON_MINIMUM))
+            x["ok"] = toolchain.probe(c, [py, "-c", f"import sys; assert sys.version_info >= {toolchain.PYTHON_MINIMUM!r}"])[0]
+            x["message"] = f"用 {py}" if x["ok"] else f"{py} 低于 {low}：装 Python {low}+ 或装 S2Arm.app（自带钉版 Python），或用 S2A_PYTHON=<解释器> 指定。{VENV}"  # 非玩家句
         elif x["name"] == "zstd":
             # 一键出包只看你自己的 PATH（前端那套会补 Homebrew，这里不补），另认 S2Arm.app 自带的那份，同 oneclick.sh
             apps = [Path(a) / "Contents/Resources/Runtime/bin/zstd" for a in ("/Applications/S2Arm.app", Path.home() / "Applications/S2Arm.app")]

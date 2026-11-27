@@ -16,6 +16,8 @@ void bf_want_note(const char *key);
 void nvn_be_pool_add(const void *mem, uint64_t size);
 void nvn_be_pool_cover(const void *mem, uint64_t size, uint64_t need);   // 池上伸出池尾的缓冲对象：池在 Metal 侧的覆盖扩到 [mem, mem + need)（D-6VG6）
 void nvn_be_pool_del(const void *mem);
+// 安卓直连：宿主已建立可读写别名；phys 为 0 时只撤掉该虚拟区间。
+int rp_buf_alias_set(uint64_t at, uint64_t len, uint64_t phys);
 // 虚拟池（hle_nvn.c，苹果宿主）：[at, at+len) 是虚拟池地址（不是宿主内存）。alias：登记成物理内存 phys 所在那条池的别名（同一个 Metal 缓冲、同一批字节，不另占内存）；
 //   phys 不整段落在一条已登记的池里 → 0。add_at：一段宿主内存 host（页对齐，hlen 字节）登记在 at，缓冲释放时 munmap 它（失败时当场 munmap）；key 是注销用的键（nvn_be_pool_del）。都按 key 注销
 int nvn_be_pool_alias(uint64_t at, uint64_t len, uint64_t phys);

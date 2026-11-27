@@ -26,10 +26,12 @@ class MacosOnlyLint(unittest.TestCase):
 
     def test_forms(self):
         bad = ["stat -f %z f", "sed -i '' s/a/b/ f", 'sed -i "" s/a/b/ f', "cp -ca a b", "x=$(stat -f %m f)",
-               "cp -c a b 2> /dev/null || die 拷不了", "cp -c a b 2>/dev/null || { echo 失败; exit 1; }"]
+               "cp -c a b 2> /dev/null || die 拷不了", "cp -c a b 2>/dev/null || { echo 失败; exit 1; }",
+               'm=$(stat -f %m f 2> /dev/null || stat -c %Y f)', 'ino() { stat -f %i "$1" 2> /dev/null || stat -c %i "$1"; }']   # BSD 在前：GNU 下先吐文件系统信息
         good = ["# cp -c 是克隆", "cp -R a b", "sed -i.bak s/a/b/ f", "stat -c %s f",
                 '[ "$(uname -s)" = Darwin ] && stat -f %z f', "cp -c a b 2> /dev/null || cp a b",
-                "if ! cp -cR a b; then cp -R a b; fi", "rm -f x  # 不用 stat -f"]
+                "if ! cp -cR a b; then cp -R a b; fi", "rm -f x  # 不用 stat -f",
+                'm=$(stat -c %Y f 2> /dev/null || stat -f %m f)']   # GNU 在前：BSD 不认 -c、不打标准输出
         for l in bad:
             self.assertTrue(lint_text(l), l)
         for l in good:

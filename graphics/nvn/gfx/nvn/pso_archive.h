@@ -161,6 +161,14 @@ static void par_ga_remove_new(NSSet<NSString *> *before) {
 // Once: the folder of this OS version, GPU and chain, and the keys it has files for
 static void par_open_dir(void) {
     static dispatch_once_t once;
+    // 身份（par_identity）要 GPU 名：设备没建好就开，身份里 GPU 写成「?」，和存着的不符 → 整个归档删掉、再写一份「?」，
+    //   下一局设备在时又判「变了」再删一次（0.6.10 iOS：快照恢复局在 mtl_init 之前就建着色器、起预热，恢复局与其后的普通局交替清空归档、
+    //   每次全部重编，玩家看到「每次都要优化画面」）。设备没建好时这一刻按没有归档走，不算身份、不写、不删；设备建好后的下一次调用才真正打开
+    if (!g_dev) {
+        static _Atomic int said;
+        if (!atomic_exchange(&said, 1)) MLOG("pipeline archive: no Metal device yet, opened once the device exists (its identity needs the GPU name)");
+        return;
+    }
     dispatch_once(&once, ^{
         const char *ev = getenv("DM_PSO_ARCHIVE"); if (ev && !strcmp(ev, "0")) { MLOG("DM_PSO_ARCHIVE=0: no pipeline archive, every pipeline compiles"); return; }
         // The package's archives (pack time, shader line 10-26: one file per pipeline under the same key, made for the target GPU): looked up first, never removed or rewritten

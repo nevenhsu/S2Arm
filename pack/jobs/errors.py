@@ -709,6 +709,21 @@ def cause_facts(code, log, texts=()):
 
 DISK_FULL_REASON = "「{0}」空间不够：这一步还要约 {1} GB，盘上只剩 {2} GB。"
 DISK_FULL_ADVICE = "在「{0}」上腾出至少 {3} GB 后重试；游戏原件、存档和上次成功的运行版本别删。"
+# 出包前预检判这块盘够、出到一半却写满：原因里说清是我们预估偏低（#444：只说「空间不够」，玩家以为是自己盘的问题，清完再试照样失败）
+DISK_FULL_LOW = "「{0}」空间不够：这一步还要约 {1} GB，盘上只剩 {2} GB。出包前估这块盘要 {3} GB、判的是够用：这次是 S2Arm 预估偏低，不是这块盘本来就不够。"
+_FULL_REASON = re.compile("^" + re.escape(DISK_FULL_REASON).replace(r"\{0\}", "(?P<vol>.+?)").replace(r"\{1\}", "(?P<need>[\\d.]+)").replace(r"\{2\}", "(?P<free>[\\d.]+)") + "$")
+
+
+def estimate_low(summary, budget):
+    """盘满的上屏原因（DISK_FULL_REASON）：这次出包的空间预检（library.check_pack_space 存在 Context.space_budget）对同名那块盘判的是够 → 换成 DISK_FULL_LOW；
+    预检本就说不够（玩家点过「仍然继续」等）、没有预检、原因不是这一句 → 原样"""
+    m = _FULL_REASON.match(summary or "")
+    if not m or not budget:
+        return summary
+    for v in budget.get("volumes", ()):
+        if v.get("volume") == m["vol"] and v.get("enough"):
+            return DISK_FULL_LOW.format(m["vol"], m["need"], m["free"], "%.0f" % (v["needBytes"] / 1e9))
+    return summary
 _FULL_NOTE = re.compile(r"【写满】.*?（盘「(?P<vol>[^」]+)」）所在盘剩 (?P<free>[\d.]+) GB，.+? 要 (?P<need>[\d.]+) GB")  # 非玩家句
 
 

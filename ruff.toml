@@ -1,4 +1,4 @@
-target-version = "py311"
+target-version = "py312"   # = 作业层下限 pack/jobs/toolchain.py PYTHON_MINIMUM
 line-length = 100
 extend-exclude = ["compat/tree", "graphics/third_party", "build", "bin", "obj"]
 

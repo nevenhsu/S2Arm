@@ -40,7 +40,7 @@ import XCTest
         let navigation = LauncherPadNavigation()
         let host = NSHostingView(rootView: ShortcutHintPreview().environment(\.padControls, navigation))
         let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 680, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
         navigation.source.isActive = { true }
         defer { navigation.detach(); window.close() }
@@ -291,7 +291,7 @@ import XCTest
         navigation.source.controllers = { [] }
         navigation.attach(window)
         defer { navigation.detach(); window.close() }
-        window.orderBack(nil)
+        UIStage.show(window)
         _ = navigation.targets(in: window)
         XCTAssertNil(primary.image, "未连接手柄时，原生按钮不能显示手柄图标")
         XCTAssertNil(cancel.image)
@@ -331,8 +331,8 @@ import XCTest
         let token = UUID()
         fixture.navigation.register(PadControl(token: token, id: "child.submit", scope: "page", view: button,
             enabled: true, activate: { submits += 1 }, adjust: nil, preferred: true, shortcuts: [.rightTrigger]))
-        fixture.window.addChildWindow(child, ordered: .above); child.orderFront(nil)
-        defer { fixture.window.removeChildWindow(child); child.close() }
+        LauncherWindowPresenter.current.attach(child, fixture.window); UIStage.show(child)
+        defer { LauncherWindowPresenter.current.detach(child, fixture.window); LauncherWindowPresenter.current.orderOut(child); child.close() }
         fixture.navigation.handle(.submit)
         XCTAssertEqual(submits, 1)
         XCTAssertEqual(fixture.submits, 0, "子弹窗不能触发父窗口完成")
@@ -341,7 +341,7 @@ import XCTest
         fixture.navigation.handle(.submit)
         XCTAssertEqual(submits, 1)
         XCTAssertEqual(fixture.submits, 0, "禁用的子弹窗提交也不能回落到父窗口")
-        fixture.window.removeChildWindow(child); child.orderOut(nil)
+        LauncherWindowPresenter.current.detach(child, fixture.window); LauncherWindowPresenter.current.orderOut(child)
         fixture.navigation.handle(.up)
         XCTAssertEqual(fixture.navigation.focusedID, "row.0", "返回父窗口后从之前的 row.1 继续导航")
         XCTAssertEqual(fixture.rowActions, 0)
@@ -398,7 +398,7 @@ private struct ShortcutHintPreview: View {
         navigation.register(PadControl(token: UUID(), id: "cancel", scope: "page", view: cancel, enabled: true, activate: { [weak self] in self?.cancels += 1 }, adjust: nil, preferred: false, shortcuts: [.back]))
         navigation.source.controllers = { [] }
         navigation.attach(window)
-        window.orderBack(nil)
+        UIStage.show(window)
     }
     func close() { navigation.detach(); window.close() }
 }

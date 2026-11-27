@@ -9,8 +9,8 @@
 set -u; H=$(cd "$(dirname "$0")/.." && pwd); T=$(mktemp -d); bad=0
 ck() { if eval "$2"; then echo "通 $1"; else echo "不通 $1"; bad=1; fi; }
 export S2A_ROOTS=$T/roots S2A_ROOTS_SHARED=$T/shared S2A_ROOTS_PRIV=$T/priv S2A_ROMFS_SEAL=1; source "$H/pack/roots.sh"   # 下面到「玩家机」一节前按开发 / 门禁机（设只读）
-ino() { stat -f %i "$1" 2> /dev/null || stat -c %i "$1"; }
-mode() { stat -f %Lp "$1" 2> /dev/null || stat -c %a "$1"; }
+ino() { stat -c %i "$1" 2> /dev/null || stat -f %i "$1"; }
+mode() { stat -c %a "$1" 2> /dev/null || stat -f %Lp "$1"; }
 # 原件：两层目录 + 三个文件（含点开头的真文件）
 O=$T/orig; mkdir -p $O/romfs/Layout/sub $O/exefs; echo a > $O/romfs/a.bin; echo lyt > $O/romfs/Layout/x.bflyt; echo cfg > $O/romfs/Layout/sub/.build.config; echo main > $O/exefs/main
 W=$(root_begin g s0) && cp -cR $O/romfs $O/exefs $W/ 2> /dev/null || cp -R $O/romfs $O/exefs $W/; root_commit g s0

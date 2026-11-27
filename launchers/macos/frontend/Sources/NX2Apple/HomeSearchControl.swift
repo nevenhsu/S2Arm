@@ -20,17 +20,14 @@ struct HomeSearchControl: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button {
-                focused = false
-                isExpanded.toggle()
-            } label: {
+            Button(action: toggleFromPointer) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 16, weight: .medium))
                     .frame(width: 40, height: 40)
                     .background(.white.opacity(hovered ? 0.08 : 0), in: Circle())
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain).controllerControl(id: "home.search", activate: editFromController).controllerRingRadius(.infinity)
+            .buttonStyle(.plain).controllerControl(id: "home.search", activate: editFromController, pointer: toggleFromPointer).controllerRingRadius(.infinity)
             .controllerID("home.search")
             .onHover { hovered = $0 }
             .launcherTooltip(loc.t(isExpanded ? "home.collapseSearch" : "home.search"), placement: .below)
@@ -73,6 +70,12 @@ struct HomeSearchControl: View {
         .onChange(of: isExpanded) { focused = $0 && !editingWithController }
         .onChange(of: focused) { if !$0 && !editingWithController { isExpanded = false } }
         .accessibilityElement(children: .contain).accessibilityIdentifier("home.search.control")
+    }
+
+    /// 鼠标点放大镜：原位展开 / 收起（按钮动作；登记成指针动作，单测经 LauncherPadNavigation.pointerActivate 走同一个函数）
+    private func toggleFromPointer() {
+        focused = false
+        isExpanded.toggle()
     }
 
     private func editFromController() {

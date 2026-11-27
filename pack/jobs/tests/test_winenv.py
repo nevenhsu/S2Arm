@@ -104,9 +104,15 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("requirements-runtime.txt", c["source"])
 
     def test_python_minimum_from_existing_preflight(self):
-        self.probe.values["python"]["version"] = [3, 10, 99]
+        # 下限按 toolchain.PYTHON_MINIMUM 现算（AST 直接读那一行，不经被测代码）：低一个小版本的最后一个补丁版判 mismatch，正好等于下限的 .0 判 ok。
+        #   原先写死 [3, 10, 99] / [3, 11, 0]，下限改 3.12 后这里成了又一份要跟着改的拷贝（11-26）
+        import ast
+        tree = ast.parse((ROOT / "pack/jobs/toolchain.py").read_text(encoding="utf-8"))
+        low = next(tuple(ast.literal_eval(n.value)) for n in ast.walk(tree)
+                   if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "PYTHON_MINIMUM" for t in n.targets))
+        self.probe.values["python"]["version"] = [low[0], low[1] - 1, 99]
         self.assertEqual(self.item(self.report(), "python")["status"], "mismatch")
-        self.probe.values["python"]["version"] = [3, 11, 0]
+        self.probe.values["python"]["version"] = [low[0], low[1], 0]
         self.assertTrue(self.item(self.report(), "python")["ok"])
 
     def test_configured_interpreter_is_the_one_probed(self):

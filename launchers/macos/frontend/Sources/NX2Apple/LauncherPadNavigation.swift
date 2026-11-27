@@ -79,6 +79,12 @@ enum LauncherPadSpatial {
         requestGeometryRefresh()
     }
     func removeControl(_ token: UUID) { controls[token] = nil; requestGeometryRefresh() }
+    /// 「鼠标点了这个控件」：执行它的指针动作（PadControl.pointer，没有就是它的 activate = 按钮自己的动作）。只看当前操作的窗口；找不到返回 false
+    func pointerActivate(_ id: String) -> Bool {
+        guard let window = activeWindow, let control = controls.values.first(where: { $0.id == id && $0.enabled && $0.view.window === window }) else { return false }
+        (control.pointer ?? control.activate)()
+        return true
+    }
     func isFullyVisible(_ id: String) -> Bool {
         guard let control = controls.values.first(where: { $0.id == id && $0.view.window === activeWindow }) else { return false }
         let frame = Self.screenFrame(control.view)
@@ -264,24 +270,24 @@ enum LauncherPadSpatial {
         // 弹窗里再开的弹窗（手柄面板 → 齿轮选单）：一路往下找到最上层看得见的那个，焦点与按键才进得去
         guard let base = baseActiveWindow else { return nil }
         var top = base
-        while let child = top.childWindows?.last(where: isOperableChild) { top = child }
+        while let child = LauncherWindowPresenter.current.children(top).last(where: isOperableChild) { top = child }
         return top
     }
     /// 能操作的子窗口：看得见、里面有控件（注册的或原生的）。macOS 27 挂在提示框 / 面板下的玻璃背景窗口（_NSGlassEffectWindow）没有控件，不算——
     ///   否则手柄按键都送到它身上，提示框的确认 / 取消没反应
     private func isOperableChild(_ child: NSWindow) -> Bool {
-        child.isVisible && (controls.values.contains { $0.view.window === child } || child.contentView.map(Self.holdsControl) == true)
+        LauncherWindowPresenter.current.isShown(child) && (controls.values.contains { $0.view.window === child } || child.contentView.map(Self.holdsControl) == true)
     }
     private var baseActiveWindow: NSWindow? {
         guard let window else { return nil }
-        if let keyboard, keyboard.panel.isVisible { return keyboard.panel }
+        if let keyboard, LauncherWindowPresenter.current.isShown(keyboard.panel) { return keyboard.panel }
         if let modal = NSApp.modalWindow { return modal }
         if let sheet = window.attachedSheet { return sheet.attachedSheet ?? sheet }
-        if let key = NSApp.keyWindow, key !== window, key.isVisible { return key }
+        if let key = NSApp.keyWindow, key !== window, LauncherWindowPresenter.current.isShown(key) { return key }
         // macOS 27 hangs a decorative glass backdrop window under alerts and panels: visible, but it holds nothing to operate.
-        if let child = window.childWindows?.last(where: isOperableChild) { return child }
-        if let popup = NSApp.orderedWindows.first(where: { candidate in
-            candidate !== window && candidate.isVisible && !candidate.canBecomeMain && controls.values.contains { $0.view.window === candidate }
+        if let child = LauncherWindowPresenter.current.children(window).last(where: isOperableChild) { return child }
+        if let popup = LauncherWindowPresenter.current.orderedWindows().first(where: { candidate in
+            candidate !== window && LauncherWindowPresenter.current.isShown(candidate) && !candidate.canBecomeMain && controls.values.contains { $0.view.window === candidate }
         }) { return popup }
         return window
     }

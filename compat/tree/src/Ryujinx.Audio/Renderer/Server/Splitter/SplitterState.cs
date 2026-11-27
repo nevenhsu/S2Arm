@@ -99,38 +99,24 @@ namespace Ryujinx.Audio.Renderer.Server.Splitter
             HasNewConnection = false;
         }
 
-        // S2Arm (#12/#13 拆分 · 渲染拍不等 Update 的锁): 分频器游戏字段落账拷贝(影子→live)。字段(Id/SampleRate/
-        //   DestinationCount/HasNewConnection)都是游戏写、拍只读,整拷;链头与 _next 不拷——影子链指向影子目的地
-        //   数组,直接拷指针会让 live 指进影子块,这里按影子链的目的地 id 序在 live 数组上原样重建(链结构只有
-        //   游戏段写,重建 = 今天语义)
-        internal void S2ACommitGameFieldsFrom(in SplitterState source, SplitterContext liveContext)
+        // S2Arm (#12/#13 拆分 · 渲染拍不等 Update 的锁): 分频器落账(影子→live)。字段(SampleRate/DestinationCount/
+        //   HasNewConnection)游戏写、拍只读,整拷;链头按下标从影子目的地数组平移回 live 数组——链结构原样照影子,
+        //   不按 id / DestinationCount 重走重建(原版 Update 在跨分频器挪动等情形下链长可短于 DestinationCount,
+        //   按计数重走会取到空节点的 Id 0、连出 0→0 自环)。目的地 _next 同法由 SplitterContext.S2ACommitFrom 落
+        internal unsafe void S2ACommitGameFieldsFrom(
+            in SplitterState source,
+            SplitterDestinationVersion1* shadowBaseV1,
+            SplitterDestinationVersion2* shadowBaseV2,
+            SplitterDestinationVersion1* liveBaseV1,
+            SplitterDestinationVersion2* liveBaseV2)
         {
             SampleRate = source.SampleRate;
             DestinationCount = source.DestinationCount;
             HasNewConnection = source.HasNewConnection;
 
-            ClearLinks();
-
-            if (source.DestinationCount > 0)
-            {
-                SplitterDestination sourceDestination = source.Destination;
-
-                SplitterDestination liveDestination = liveContext.GetDestination(sourceDestination.Id);
-
-                SetDestination(liveDestination);
-
-                SplitterDestination tail = liveDestination;
-
-                for (int i = 1; i < source.DestinationCount; i++)
-                {
-                    sourceDestination = sourceDestination.Next;
-
-                    SplitterDestination nextLive = liveContext.GetDestination(sourceDestination.Id);
-
-                    tail.Link(nextLive);
-                    tail = nextLive;
-                }
-            }
+            _destinationDataV1 = source._destinationDataV1;
+            _destinationDataV2 = source._destinationDataV2;
+            S2ARebindSnapshotPointers(shadowBaseV1, shadowBaseV2, liveBaseV1, liveBaseV2);
         }
 
         /// <summary>

@@ -22,6 +22,9 @@ void __wrap_nvn_gpu_pass_begin(nvn_gpu_cmd cmd, const nvn_gpu_pass_desc *pass) {
 void rp_perf_add(int index, uint64_t value) { (void)index; (void)value; }
 uint64_t rp_seg_serial(void) { return 1; }
 uint64_t rp_sub_serial(void) { return 1; }
+// Every recorded command is submitted once with the next value in rp_side_commit.
+uint64_t rp_sub_fence(void) { return fence_signal + 1; }
+int rp_fence_done(uint64_t value) { return nvn_gpu_fence_done() >= value; }
 int rp_occl_want(void) { return 0; }
 void rp_occl_pass_opened(int declared) { CHECK(!declared, "unexpected occlusion"); }
 void rp_occl_pass_closed(void) {}
@@ -208,9 +211,11 @@ static void sample(const char *dir, nvn_gpu_view one, nvn_gpu_view array) {
         nvn_gpu_set_pipe(active, pipeline);
         nvn_gpu_bind(active, NVN_GPU_SH_CS, bind, sizeof bind / sizeof bind[0]);
         nvn_gpu_dispatch(active, pipeline, 1, 1, 1, NULL, 0);
+        const uint64_t pending = rp_sub_fence();
+        CHECK(!rp_fence_done(pending), "1D pending fence completed before submit");
         const uint64_t fence = rp_side_commit(active);
         const int retired = fence && OK(nvn_gpu_fence_wait(fence, 5000000000ull, &err));
-        CHECK(retired, "1D sample completion: %s", err.why);
+        CHECK(fence == pending && retired && rp_fence_done(fence), "1D sample completion: %s", err.why);
         const float *pixels = retired ? (const float *)buf_cpu(output) : NULL;
         unsigned next = 0, matches = 0;
         if (pixels) for (unsigned mip = 0; mip < LEVELS; mip++) {

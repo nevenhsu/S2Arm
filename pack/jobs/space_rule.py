@@ -60,20 +60,23 @@ def pack_input_bytes(packages):
     # 同一 sha 的原件只计一次：取原件大小与所选各项内容字节的大值（NSZ/XCZ 解开比原件大）。
     # 压缩合集（XCZ 等）一个原件装多项，各项内容互不重叠，contentBytes 相加（#444：原先按 sha 去重只留最后一项，解开后的量少算）。
     # NUP 容器不同：不压缩、容器内按块去重，更新是整份打过补丁的文件系统、和本体共用数据块，各项 contentBytes 重叠——
-    #   0400486024DEC000：文件 25.62 GB，本体、更新各 26.27 GB，相加成 52.5 GB 多估一倍——取各项最大值，不相加
+    #   0400486024DEC000：文件 25.62 GB，本体、更新各 26.27 GB，相加成 52.5 GB 多估一倍——本体 / 更新取最大值，不相加；
+    #   DLC 是另一棵文件树、不和本体共用（#444：010015100B514000 带 DLC，取最大值时整份漏算）——DLC 各项相加
     by_sha = {}
     for p in packages:
-        size, summed, largest, nup = by_sha.get(p["sha256"], (0, 0, 0, False))
+        size, summed, largest, dlc, nup = by_sha.get(p["sha256"], (0, 0, 0, 0, False))
         content = p.get("contentBytes", 0)
-        by_sha[p["sha256"]] = (max(size, p.get("size", 0)), summed + content, max(largest, content), nup or p.get("format") == "nup")
-    return sum(max(size, largest if nup else summed) for size, summed, largest, nup in by_sha.values())
+        is_dlc = p.get("type") == "dlc"
+        by_sha[p["sha256"]] = (max(size, p.get("size", 0)), summed + content, largest if is_dlc else max(largest, content),
+                               dlc + (content if is_dlc else 0), nup or p.get("format") == "nup")
+    return sum(max(size, largest + dlc if nup else summed) for size, summed, largest, dlc, nup in by_sha.values())
 
 
 def pack_direct_bytes(size):
     return DIRECT_SMALL_BYTES if size < PACK_SMALL_BYTES else DIRECT_LARGE_BYTES
 
 
-def pack_need_bytes(packages, unpacked=False, windows=None, image=False, clones=None, links=True, keep_unpack=False):
+def pack_need_bytes(packages, unpacked=False, windows=None, image=False, clones=None, links=True, keep_unpack=False, unpack_bytes=None):
     """这次出包要多少盘；packages 已按 selected_packages 选定。unpacked：解包目录已完整在盘上。windows 不给就按当前系统。
     image：打 iPhone 包（单一 IMG 交付）——出包最后一步把资源整份写成 game.img（真数据，克隆不了），写时解包目录、直连缓存都还在盘上，
     再加一份原件大小（11-11 实测 0400486024DEC000：IMG 24.49 GiB ≈ 资源内容 24.47 GiB，整次峰值 57.90 GiB 出在写 IMG 时；原先没算，预留 43.9 GB < 峰值 62.2 GB）。
@@ -85,7 +88,9 @@ def pack_need_bytes(packages, unpacked=False, windows=None, image=False, clones=
     RomFS 那份逐文件挪进 game.img，不再同时占两份——IMG 这一项记 0。只有 keep_unpack（同一款接着还要出别的平台、或这次复用了已有解包：
     可能和别的产物共享克隆，删了腾不出来）才照旧再加一份原件大小。原先一律加：256 GB 的 Mac 出 43 GB 的游戏预估 106 GB，从能出变成出不了"""
     size = pack_input_bytes(packages)
-    copy = size * 11 // 10
+    # unpack_bytes：解包目录在存放位置那块盘上实际要占的字节（按该卷分配单元逐文件向上取整，library.nup_unpack_bytes；#444：exFAT 1 MB 簇上
+    #   解包中间目录与解包目录两份共 5 万个文件、13.4 GB，实占 59 GB）。给了就按它，不给按原件大小；解包、不能克隆另占的资源包、建不了链接的两份都是这同一棵树
+    copy = (size if unpack_bytes is None else unpack_bytes) * 11 // 10
     windows = os.name == "nt" if windows is None else windows
     # clones=False：存放位置所在卷不能克隆（Mac 上 HFS+ 等非 APFS，v0.3.1 放开后克隆自动退回普通拷贝），资源包同 Windows 再占一份；不给 = 按系统
     no_clone = windows or clones is False

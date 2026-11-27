@@ -101,10 +101,39 @@ static BOOL presentationConsistent(const PresentObservation *o, double productio
     return production == (o->sampledTime > 0 ? o->sampledTime : 0);
 }
 
+// 门禁偶发：某格停在下面的等待里，直到 60 秒闹钟（11-21 起每天数局，单机连跑 144 格复现不出）。等过 5 秒打一行现场：
+//   观测值、本窗口状态、最前台 App、压在本窗口上面的屏上窗口（所属 App / 层级 / 位置；不取窗口标题，不需要录屏授权）、主屏睡眠。
+//   第一次打出时门槛临时改 0 实跑过一格（68/68 过、行如期出现）
+static void stallReport(const char *name, uint64_t ticket, const PresentObservation *o, double production, double waited) {
+    __block NSString *win = @"本窗口没找到";
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (NSWindow *window in NSApp.windows) {
+            if (window.contentView.layer != layer) continue;
+            NSMutableString *above = [NSMutableString string];
+            CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements, (CGWindowID)window.windowNumber);
+            int system = 0;   // 菜单栏 / 程序坞 / 通知中心（层 ≥ 20）一直在上面，只计数
+            for (NSDictionary *w in (__bridge NSArray *)list) {
+                if ([w[(id)kCGWindowLayer] intValue] >= 20) { system++; continue; }
+                CGRect r = CGRectZero; CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds], &r);
+                [above appendFormat:@" [%@ 层%@ %.0fx%.0f@%.0f,%.0f]", w[(id)kCGWindowOwnerName], w[(id)kCGWindowLayer], r.size.width, r.size.height, r.origin.x, r.origin.y];
+            }
+            if (list) CFRelease(list);
+            [above appendFormat:@"（另有系统层 %d 个）", system];
+            win = [NSString stringWithFormat:@"窗口 #%ld visible=%d occluded=%d onActiveSpace=%d key=%d main=%d；本进程 active=%d；最前台 %@；上面的屏上窗口%@",
+                (long)window.windowNumber, window.visible, !(window.occlusionState & NSWindowOcclusionStateVisible), window.onActiveSpace,
+                window.keyWindow, window.mainWindow, NSApp.active, NSWorkspace.sharedWorkspace.frontmostApplication.localizedName ?: @"无",
+                above];
+        }
+    });
+    printf("【卡】%s ticket %llu 等呈现回调 %.1f 秒：handlers=%u platform=%.6f sampled=%.6f ring=%.6f drawable#%llu acquired=%.3f now=%.3f；%s；主屏睡眠=%d\n",
+        name, ticket, waited, o->callbacks, o->platformTime, o->sampledTime, production, o->drawableID, o->acquired, CACurrentMediaTime(),
+        win.UTF8String, CGDisplayIsAsleep(CGMainDisplayID()));
+}
+
 static BOOL checkPresentation(NSString *name, uint64_t sequence, uint64_t ticket, id<CAMetalDrawable> drawable) {
     PresentObservation o;
     // 等平台呈现回调，兜底 30 秒（原 3 秒：负载高时系统回调晚到就判不一致假红）；回调一到就退出循环
-    double production, end=CACurrentMediaTime()+30;
+    double production, begin=CACurrentMediaTime(), end=begin+30; BOOL reported=NO;
     for (;;) {
         double sample=drawable ? drawable.presentedTime : -1;
         pthread_mutex_lock(&drawableMutex);
@@ -115,6 +144,7 @@ static BOOL checkPresentation(NSString *name, uint64_t sequence, uint64_t ticket
         pthread_mutex_unlock(&drawableMutex);
         production=nvn_be_presented_time(ticket);
         if (((o.callbacks || o.sampledTime>0) && presentationConsistent(&o,production)) || CACurrentMediaTime()>=end) break;
+        if (!reported && CACurrentMediaTime()-begin>5) { reported=YES; stallReport(name.UTF8String,ticket,&o,production,CACurrentMediaTime()-begin); }
         struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
     }
     // 没有 handler 且没有正呈现时间，只能确认 ring 尚无记录，不能算已显示。

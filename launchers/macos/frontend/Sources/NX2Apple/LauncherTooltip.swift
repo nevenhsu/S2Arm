@@ -71,7 +71,7 @@ final class LauncherTooltipPresenter {
 
     func show(for anchor: LauncherTooltipAnchor) {
         dismiss()
-        guard let window = anchor.window, window.isVisible, !anchor.isHiddenOrHasHiddenAncestor,
+        guard let window = anchor.window, LauncherWindowPresenter.current.isShown(window), !anchor.isHiddenOrHasHiddenAncestor,
               !anchor.visibleRect.isEmpty, !anchor.text.isEmpty else { return }
         source = anchor
         func observe(_ name: Notification.Name, object: AnyObject) {
@@ -101,7 +101,7 @@ final class LauncherTooltipPresenter {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }; clickMonitor = nil
-        if let panel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
+        if let panel { if let parent = panel.parent { LauncherWindowPresenter.current.detach(panel, parent) }; LauncherWindowPresenter.current.orderOut(panel) }
         source = nil
     }
 
@@ -125,8 +125,8 @@ final class LauncherTooltipPresenter {
         }
         tip.contentView = bubble
         tip.setFrame(layout.frame, display: true)
-        if tip.parent !== owner { owner.addChildWindow(tip, ordered: .above) }
-        tip.orderFront(nil); tip.invalidateShadow()
+        if tip.parent !== owner { LauncherWindowPresenter.current.attach(tip, owner) }
+        LauncherWindowPresenter.current.orderFront(tip); tip.invalidateShadow()
     }
 
     deinit {

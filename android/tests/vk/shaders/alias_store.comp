@@ -1,0 +1,18 @@
+#version 450
+layout(local_size_x=1) in;
+#if defined(RG3D)
+layout(set=0,binding=0,rg16f) writeonly uniform image3D output_image;
+#elif defined(RGBA3D)
+layout(set=0,binding=0,rgba16f) writeonly uniform image3D output_image;
+#else
+layout(set=0,binding=0,rgba16f) writeonly uniform image2D output_image;
+#endif
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+#ifdef RGBA2D
+    ivec2 p = ivec2(i,0);
+#else
+    ivec3 p = ivec3(0,0,i);
+#endif
+    imageStore(output_image,p,vec4(i+1,-2,3,0.5));
+}

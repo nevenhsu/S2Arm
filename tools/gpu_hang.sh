@@ -17,7 +17,7 @@ S2A_GPU_HANG_RE='GPU Hang|kIOGPUCommandBufferCallbackErrorHang|kIOGPUCommandBuff
 #   （S2A_GPU_HANG_STATE_DIR；不给就放被扫文件旁边 .<文件名>.gpu_hang_pos.<调用方 $$>，随局目录清，不往 TMPDIR 丢）。命中后照旧返回 0、打第一行（截 160 字）
 s2a_gpu_hang() {
   local f=$1 sz pos st l back=${S2A_GPU_HANG_BACK:-4096}
-  sz=$(stat -f %z "$f" 2> /dev/null || stat -c %s "$f" 2> /dev/null) || return 1
+  sz=$(stat -c %s "$f" 2> /dev/null || stat -f %z "$f" 2> /dev/null) || return 1
   # 状态缺省放在被扫文件旁边（随局目录一起清）；目录不可写才退回 TMPDIR（11-11 合入运维线：原先一律放 TMPDIR、从不删，每局一个，积了 6400 多个）
   if [ -n "${S2A_GPU_HANG_STATE_DIR:-}" ]; then st=$S2A_GPU_HANG_STATE_DIR/s2a_gpu_hang.$(printf '%s' "$f" | cksum | cut -d' ' -f1).$$
   elif [ -w "$(dirname "$f")" ]; then st=$(dirname "$f")/.$(basename "$f").gpu_hang_pos.$$

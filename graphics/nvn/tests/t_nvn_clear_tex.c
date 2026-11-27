@@ -80,7 +80,7 @@ static void test_levels_layers_and_types(void) {
     end(&conv); submit1(&conv); fake_complete(NVN_GPU_DONE_OK);
     CHECK(g_cv.n == 1 && g_cv.is_int && g_cv.u[0] == 0 && g_cv.u[1] == 12 && g_cv.u[2] == 0xffffffffu && g_cv.u[3] == 1);
     clear_fresh(); tex_t v = mk_tex(206, 0, NVN_FORMAT_RGBA8, 8, 8, 1, 0);
-    stream bad = {0}; p = clear_op(&bad, &v, 0, 0, 8, 8, 15); p->has_view = 1; p->view.set_format = 1; p->view.format = NVN_FORMAT_RGBA8UI;
+    stream bad = {0}; p = clear_op(&bad, &v, 0, 0, 8, 8, 15); p->has_view = 1; p->view.set_format = 1; p->view.format = NVN_FORMAT_R8;
     end(&bad); submit1(&bad); fake_complete(NVN_GPU_DONE_OK);
     CHECK(g_cv.n == 0 && g_npd == 0 && nvn_unimpl_count("tex", "clear_view_format") == 1 && !nvn_be_tex_gpu_owned(v.serial));
 }

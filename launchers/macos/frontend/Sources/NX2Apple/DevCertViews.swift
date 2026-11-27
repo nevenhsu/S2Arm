@@ -204,7 +204,7 @@ struct DevCertSheet: View {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = types.compactMap { UTType(filenameExtension: $0) }
                     panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let url = panel.url { path.wrappedValue = url.path }
+                    if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { path.wrappedValue = url.path }
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle())
                 .accessibilityIdentifier("export.sign.sheet.choose." + id)

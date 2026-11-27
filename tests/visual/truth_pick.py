@@ -26,4 +26,4 @@ for off in map(int, a.offsets.split(',')):
     if t is None: sys.exit(f'🔴 到达 t{arr} 后 {off} 秒没有截图（最后一张 t{ts[-1]}）')
     out = os.path.join(d, f'ryu_{a.run}_{off}.png')
     Image.open(fs[t]).convert('RGB').resize((960, 540), Image.LANCZOS).save(out)
-    print(f'到达 t{arr}（亮度 {lum.get(arr, float('nan')):.0f}）+{off}s → t{t} → {out}')
+    print(f'到达 t{arr}（亮度 {lum.get(arr, float("nan")):.0f}）+{off}s → t{t} → {out}')

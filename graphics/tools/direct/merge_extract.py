@@ -179,7 +179,7 @@ def main(a):
     for r in red: print('【红】' + r)
     for r in yellow[:20]: print('【黄】' + r)
     if len(yellow) > 20: print(f'【黄】……共 {len(yellow)} 支没有字节、跳过')
-    print(f"{'🔴' if red else '🟢'} 合并抽取：直连抽取 {st['direct']}、S2Arm {st['s2arm']}、交集 {st['交集']}、S2Arm 独有 {st['s2arm独有']}（已补进包目录与表）、直连抽取独有 {st['direct独有']}（已按 S2Arm 格式补 {st['反向补进 S2Arm']} 个）、并集 {st['并集']}；计算着色器 {st['计算着色器']} 个、答案表按控制段补线程组 {filled} 个{f"；{len(no_tg)} 个控制段读不出线程组（不补，运行时这些派发会跳过）" if no_tg else ""}")
+    print(f"{'🔴' if red else '🟢'} 合并抽取：直连抽取 {st['direct']}、S2Arm {st['s2arm']}、交集 {st['交集']}、S2Arm 独有 {st['s2arm独有']}（已补进包目录与表）、直连抽取独有 {st['direct独有']}（已按 S2Arm 格式补 {st['反向补进 S2Arm']} 个）、并集 {st['并集']}；计算着色器 {st['计算着色器']} 个、答案表按控制段补线程组 {filled} 个{f'；{len(no_tg)} 个控制段读不出线程组（不补，运行时这些派发会跳过）' if no_tg else ''}")
     return 1 if red else 0
 
 

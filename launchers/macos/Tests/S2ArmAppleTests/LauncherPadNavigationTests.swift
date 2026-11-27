@@ -80,7 +80,7 @@ final class LauncherPadInputTests: XCTestCase {
         var value = "old"
         let host = NSHostingView(rootView: TextField("Name", text: Binding(get: { value }, set: { value = $0 })).frame(width: 300).padding())
         let window = NSWindow(contentRect: NSRect(x: 50, y: 50, width: 400, height: 140), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         defer { window.close() }
         host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(80))
         let field = try XCTUnwrap(LauncherPadNavigation.elements(window).first { S2ALauncherAX.role($0) == "AXTextField" })
@@ -100,17 +100,17 @@ final class LauncherPadInputTests: XCTestCase {
         let confirm = NSButton(title: "Child action", target: sink, action: #selector(PadActionSink.childAction))
         confirm.frame = NSRect(x: 20, y: 40, width: 160, height: 40); child.contentView?.addSubview(confirm)
         let navigation = LauncherPadNavigation(); navigation.attach(parent)
-        defer { navigation.detach(); parent.removeChildWindow(child); child.close(); parent.close() }
+        defer { navigation.detach(); LauncherWindowPresenter.current.detach(child, parent); LauncherWindowPresenter.current.orderOut(child); child.close(); parent.close() }
         let parentID = navigation.targets(in: parent).first!.id
         navigation.focus(parentID)
         // Populate the parent's scope before opening the panel.
         navigation.handle(.right)
-        parent.addChildWindow(child, ordered: .above); child.orderFront(nil)
+        LauncherWindowPresenter.current.attach(child, parent); UIStage.show(child)
         XCTAssertFalse(navigation.inMainContent)
         navigation.handle(.confirm)
         XCTAssertEqual(sink.parentCount, 0, "弹窗打开后 A 不能穿透到父窗口")
         XCTAssertEqual(sink.childCount, 1)
-        parent.removeChildWindow(child); child.orderOut(nil)
+        LauncherWindowPresenter.current.detach(child, parent); LauncherWindowPresenter.current.orderOut(child)
         navigation.handle(.left)
         XCTAssertEqual(navigation.focusedID, parentID)
     }

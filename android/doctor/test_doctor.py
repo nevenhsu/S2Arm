@@ -29,7 +29,7 @@ def openssl_recipe(repo):
 
 class DoctorTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='android-doctor-', dir=os.environ['TMPDIR'])
+        self.temp = tempfile.TemporaryDirectory(prefix='android-doctor-', dir=os.environ.get('TMPDIR'))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve() / '中文 空格'
         self.root.mkdir()
@@ -677,7 +677,7 @@ class LayoutTest(unittest.TestCase):
     """Exercise the production parser on real sources and bounded synthetic mutations."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='doctor-layout-', dir=os.environ['TMPDIR'])
+        self.temp = tempfile.TemporaryDirectory(prefix='doctor-layout-', dir=os.environ.get('TMPDIR'))
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
         # The original parser must also reach each test body for the old-code control.

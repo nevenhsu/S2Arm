@@ -122,6 +122,11 @@ package enum LauncherSheetSize {
         case .compact: return LauncherTheme.Metrics.compactWidth
         }
     }
+    /// 弹窗窗口高度上限：AppKit beginSheet 在弹窗高度 <= 父窗口高度 - 136 pt 时才会以父窗口中心垂直居中（留出顶栏 + 对称底边距），
+    ///   所以有父窗口时按它裁（不低于 360）；还不知道父窗口时按屏幕高度留 100
+    package static func maxWindowHeight(parent: CGFloat?, screen: CGFloat) -> CGFloat {
+        parent.map { max(360, $0 - 136) } ?? (screen - 100)
+    }
     package func fitted(to screen: CGSize, height: CGFloat?) -> (width: CGFloat, height: CGFloat?) {
         (min(width, screen.width - 64), height.map { min($0, screen.height - 100) })
     }
@@ -148,9 +153,8 @@ private struct LauncherSheetPresentation: ViewModifier {
     func body(content: Content) -> some View {
         let screen = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900)
         let dimensions = size.fitted(to: screen, height: height)
-        // AppKit beginSheet 在弹窗高度 <= 父窗口高度 - 136 pt 时才会以父窗口中心垂直居中（留出顶栏 + 对称底边距）；
-        // 若只按屏幕高度裁剪，在常见 630~750 pt 外窗口上会把弹窗顶到最底边。
-        let maxWindowHeight = parentHeight.map { max(360, $0 - 136) } ?? (screen.height - 100)
+        // 若只按屏幕高度裁剪，在常见 630~750 pt 外窗口上会把弹窗顶到最底边（规则见 LauncherSheetSize.maxWindowHeight）
+        let maxWindowHeight = LauncherSheetSize.maxWindowHeight(parent: parentHeight, screen: screen.height)
         let fittedHeight = dimensions.height.map { min($0, maxWindowHeight) }
         let page = content
             .frame(width: dimensions.width, height: fittedHeight)

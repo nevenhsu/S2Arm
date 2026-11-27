@@ -46,7 +46,7 @@ import S2ArmAppleAdapter
                         eventNumber: 0, trackingNumber: 0, userData: nil))
                     let started = ProcessInfo.processInfo.systemUptime
                     anchor.mouseEntered(with: event)
-                    let panel = try XCTUnwrap(window.childWindows?.first { $0.identifier?.rawValue == "launcher.tooltip" && $0.isVisible },
+                    let panel = try XCTUnwrap(UIStage.shared.children(of: window).first { $0.identifier?.rawValue == "launcher.tooltip" && UIStage.shared.isShown($0) },
                         "悬停进入时必须同步显示提示")
                     let elapsed = ProcessInfo.processInfo.systemUptime - started
                     print("tooltip \(language.code)/\(Int(width))/\(id): \(elapsed * 1000) ms, above=\(above)")
@@ -64,7 +64,7 @@ import S2ArmAppleAdapter
                     XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width, "提示文字必须完整显示，包含原生控件的内边距")
                     if width == 1120 { try snapshot(try XCTUnwrap(panel.contentView), "tooltip-\(id)-\(language.code)") }
                     anchor.mouseExited(with: event)
-                    XCTAssertFalse(panel.isVisible, "离开图标立即收起")
+                    XCTAssertFalse(UIStage.shared.isShown(panel), "离开图标立即收起")
                 }
                 _ = host
             }
@@ -76,19 +76,17 @@ import S2ArmAppleAdapter
         defer { fixture.remove() }
         for language in [Lang.zh, .en] {
             for player in 0..<4 {
-                // 拿不到焦点的窗口（同首页搜索用例，UnfocusableWindow）：门禁机上测试进程有时是前台程序，点玩家分段那一下会被当成「激活窗口」吞掉，
-                //   选中态等满 3 秒也不来（11-15 起偶发 16 次，第 102 行取色 0.26）；本机测试进程不是前台、从不红
-                let (host, window) = try await render(AnyView(InputSettingsSheet(model: fixture.model, gameID: "fixture")), fixture: fixture, language: language, keyable: false)
+                let (host, window) = try await render(AnyView(InputSettingsSheet(model: fixture.model, gameID: "fixture")), fixture: fixture, language: language)
                 let navigation = fixture.navigation
                 navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
-                window.orderFront(nil)
+                UIStage.show(window)
                 defer { navigation.detach(); window.close() }
                 try await settle(window, navigation, fixture.model.gamepad)
                 let players = navigation.controlTargets(in: window).filter { abs($0.frame.height - 30) < 0.5 }
                     .sorted { $0.frame.minX < $1.frame.minX }
                 XCTAssertEqual(players.count, 4)
                 let playerRect = window.convertFromScreen(players[player].frame)
-                try click(CGPoint(x: playerRect.midX, y: playerRect.midY), in: window)
+                try press(players[player].id, navigation)
                 // 等选中态真画出来再判：固定等 180 ms 在整套负载下偶发取到旧色。每 50 ms 截一次取色，选中即停，最多等 3 秒
                 let point = host.convert(CGPoint(x: playerRect.minX + 5, y: playerRect.midY), from: nil)
                 var red: CGFloat = 0
@@ -105,8 +103,8 @@ import S2ArmAppleAdapter
                 for target in ["A", "B", "Y", "X", "L"] {
                     navigation.focus("input.map." + target)
                     let key = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "input.map." + target })
-                    let rect = window.convertFromScreen(key.frame)
-                    try click(CGPoint(x: rect.midX, y: rect.midY), in: window)
+                    _ = key
+                    try press("input.map." + target, navigation)
                     if let scroll = scrollViews(in: host).first(where: { $0.hasVerticalScroller }) {
                         scroll.contentView.scroll(to: .zero)
                         scroll.reflectScrolledClipView(scroll.contentView)
@@ -650,7 +648,7 @@ import S2ArmAppleAdapter
             let keyboard = try XCTUnwrap(navigation.keyboard, "手柄确认游戏标题应直接打开屏幕键盘")
             XCTAssertEqual(keyboard.value, game.name, "从现有标题开始修改")
             XCTAssertNil(window.attachedSheet, "不再打开修改名字的输入弹窗")
-            XCTAssertTrue(keyboard.panel.parent === window)
+            XCTAssertTrue(UIStage.shared.children(of: window).contains { $0 === keyboard.panel }, "屏幕键盘挂在出包页窗口上")
             try snapshot(host, "export-name-ready-" + language.code)
             try snapshot(try XCTUnwrap(keyboard.panel.contentView), "export-name-keyboard-" + language.code)
             keyboard.value = "Cancelled title"
@@ -737,13 +735,11 @@ import S2ArmAppleAdapter
                 let (host, window) = try await render(page, fixture: fixture, language: language)
                 let navigation = fixture.navigation
                 navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
-                window.makeKeyAndOrderFront(nil)
+                UIStage.show(window)
                 defer { navigation.detach(); window.close() }
                 func clickTitle() throws {
                     host.layoutSubtreeIfNeeded()
-                    let title = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "export.name" })
-                    let point = window.convertFromScreen(CGRect(x: title.frame.minX + 20, y: title.frame.midY, width: 0, height: 0)).origin
-                    try click(point, in: window)
+                    try focusTextField(in: "export.name", navigation, window: window)
                 }
                 let before = fixture.runner.requests.filter { $0["operation"] as? String == "customize" }.count
                 try clickTitle()
@@ -814,6 +810,7 @@ import S2ArmAppleAdapter
                 let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
                 navigation.source.controllers = { [controller] }; navigation.source.tick(now: 0)
                 navigation.focus("home.group.all")
+                XCTAssertTrue(navigation.activeWindow === window, "前提：当前操作的是首页窗口（舞台上还显示着：\(UIStage.shared.shownWindows.map { "\(type(of: $0)) \($0.identifier?.rawValue ?? "")" })）")
                 var time = 0.01
                 for expected in [HomeGroup.ready, .recent, .favorites, .all] {
                     pad.rightShoulder.setValue(1); navigation.source.tick(now: time)
@@ -856,7 +853,7 @@ import S2ArmAppleAdapter
         navigation.attach(window); navigation.source.stop(); navigation.source.isActive = { true }
         defer { navigation.detach(); window.close() }
         // 生产路由优先处理 keyWindow；合成按键前明确把焦点交给被测窗口。
-        window.makeKeyAndOrderFront(nil)
+        UIStage.show(window)
         try await waitUntil { navigation.activeWindow === window && navigation.inMainContent }
         let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
         let receive = navigation.source.receive
@@ -1117,7 +1114,7 @@ import S2ArmAppleAdapter
         let state = SearchControlState()
         let (host, window) = try await render(AnyView(SearchControlPreview(state: state)), fixture: fixture, language: .zh)
         defer { window.close() }
-        window.makeKeyAndOrderFront(nil)
+        UIStage.show(window)
         let navigation = fixture.navigation
         navigation.source.controllers = { [] }
         navigation.attach(window)
@@ -1128,19 +1125,22 @@ import S2ArmAppleAdapter
         XCTAssertTrue(window.firstResponder is NSTextView, "展开后应聚焦原生输入框")
         state.query = "Original"
         try await Task.sleep(for: .milliseconds(80))
-        let clear = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.clear" })
-        let clearFrame = window.convertFromScreen(clear.frame)
-        try click(CGPoint(x: clearFrame.midX, y: clearFrame.midY), in: window)
+        try press("home.search.clear", navigation)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(state.expanded, "点击胶囊内的清空按钮不能收起")
         XCTAssertEqual(state.query, "")
         state.query = "Original"
         let outside = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "search-test.outside" })
         let outsideFrame = window.convertFromScreen(outside.frame)
-        try click(CGPoint(x: outsideFrame.midX, y: outsideFrame.midY), in: window)
+        // 收起靠的是本地鼠标监听（HomeSearchControl.Host）：原样的鼠标按下经 NSApp 分派才会经过它。「不吞点击」= 它把事件原样交下去：
+        //   排在它后面装的监听能收到同一个事件（不上屏的窗口里 SwiftUI 按钮本身不接合成鼠标事件，外部按钮的计数不能当证据）
+        var passedOn = 0
+        let after = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { e in if e.window === window { passedOn += 1 }; return e }
+        defer { if let after { NSEvent.removeMonitor(after) } }
+        try rawClick(CGPoint(x: outsideFrame.midX, y: outsideFrame.midY), in: window)
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertFalse(state.expanded, "点击搜索框外应自动收起")
-        XCTAssertEqual(state.outsideClicks, 1, "收起搜索不能吞掉外部按钮的点击")
+        XCTAssertEqual(passedOn, 1, "收起搜索不能吞掉外部按钮的点击（鼠标按下要原样交给后面）")
         XCTAssertEqual(state.query, "Original", "自动收起应保留查询")
         state.expanded = true
         try await Task.sleep(for: .milliseconds(350))
@@ -1150,7 +1150,7 @@ import S2ArmAppleAdapter
         XCTAssertEqual(state.query, "Original")
         state.expanded = true
         try await Task.sleep(for: .milliseconds(350))
-        try click(CGPoint(x: 20, y: 20), in: window)
+        try rawClick(CGPoint(x: 20, y: 20), in: window)
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertFalse(state.expanded, "点击非焦点控件的空白处也应收起")
         try snapshot(host, "home-search-dismissed")
@@ -1176,7 +1176,27 @@ import S2ArmAppleAdapter
         try snapshot(host, "home-search-query-without-badge")
     }
 
-    private func click(_ point: CGPoint, in window: NSWindow) throws {
+    /// 鼠标点控件的等价操作：不上屏的窗口里 SwiftUI 控件不接合成鼠标事件（11-26 探针：发给窗口 / 发给 App 都是 0 次），SwiftUI 按钮也不在无障碍树里；
+    ///   经登记表执行它的指针动作（LauncherPadNavigation.pointerActivate：按钮自己的动作，鼠标与手柄动作不同的控件另登记了 pointer）
+    private func press(_ id: String, _ navigation: LauncherPadNavigation, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertTrue(navigation.pointerActivate(id), "当前窗口里没有可用的控件 \(id)", file: file, line: line)
+    }
+
+    /// 鼠标点文本框的等价操作：让它成为第一响应者（AppKit 鼠标按下文本框做的就是这一步；不上屏也成立，11-26 探针）。
+    ///   SwiftUI 的无障碍标识不落到底层 NSTextField 上，按登记表里控件 control 的位置找落在它里面的可编辑文本框
+    private func focusTextField(in control: String, _ navigation: LauncherPadNavigation, window: NSWindow, file: StaticString = #filePath, line: UInt = #line) throws {
+        let target = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == control }, "窗口里没有控件 \(control)", file: file, line: line)
+        func find(_ v: NSView) -> NSTextField? {
+            if let t = v as? NSTextField, t.isEditable, window.convertToScreen(t.convert(t.bounds, to: nil)).intersects(target.frame) { return t }
+            for c in v.subviews { if let r = find(c) { return r } }
+            return nil
+        }
+        let field = try XCTUnwrap(window.contentView.flatMap(find), "\(control) 里没有可编辑的文本框", file: file, line: line)
+        XCTAssertTrue(window.makeFirstResponder(field), "\(control) 的文本框拿不到输入焦点", file: file, line: line)
+    }
+
+    /// 原样的鼠标按下 / 抬起经 NSApp 分派：只用来触发本地鼠标监听（点外面收起这类）；不上屏的窗口里 SwiftUI 控件本身不接它
+    private func rawClick(_ point: CGPoint, in window: NSWindow) throws {
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -1214,13 +1234,11 @@ import S2ArmAppleAdapter
             for width: CGFloat in [800, 1000, 1120, 1440] {
                 fixture.model.home.search = ""
                 let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
-                // 窗口拿不到焦点：首页搜索框按设计在窗口失焦 / 输入框失焦时收起。门禁机上测试进程有时是前台程序，窗口焦点在进程内外来回变：
-                //   合成点击被当成「激活窗口」吞掉（b0f9f16b3c5e49a2）、点 5 次都没展开（06:31）、展开后窗口失焦又收起（11-20 10:46 第 1285 行）；
-                //   本机测试进程不是前台、窗口从来不是焦点窗口，所以单跑从不红。这里固定成本机那种状态，只测展开 / 输入 / 保留查询本身
-                let (host, window) = try await render(page, fixture: fixture, language: language, keyable: false)
+                // 窗口不上屏（UIStage）：不会成为焦点窗口，也就不会因失焦按设计收起搜索；结果不随桌面焦点 / 前台程序变
+                let (host, window) = try await render(page, fixture: fixture, language: language)
                 navigation.attach(window)
                 navigation.source.stop()
-                window.orderFront(nil)
+                UIStage.show(window)
                 defer { navigation.detach(); window.close() }
                 func settleSearch() async throws {
                     var previous = CGRect.null
@@ -1233,30 +1251,22 @@ import S2ArmAppleAdapter
                     }
                     if !navigation.controlTargets(in: window).contains(where: { $0.id == "home.search" }) {
                         XCTFail("""
-                            \(language)/\(width): 没有 home.search；游戏 \(fixture.model.games.count) 款，窗口可见 \(window.isVisible) 焦点 \(window.isKeyWindow)，App 前台 \(NSApp.isActive)
+                            \(language)/\(width): 没有 home.search；游戏 \(fixture.model.games.count) 款
                             可用控件：\(navigation.controlTargets(in: window).map(\.id))
                             登记：
                             \(navigation.registrationReport(in: window))
                             """)
                     }
                 }
-                // 点搜索按钮，按事件等它切换：看「展开的输入框在不在」翻没翻，没翻（负载高时合成点击偶尔被吞，门禁 b0f9f16b3c5e49a2 等满 30 秒假红）
-                //   就重新取位置再点，不靠等时间；最多 5 次，真点不开照样红
-                //   5 次都没翻就把窗口焦点 / App 前台状态写进失败信息（门禁 06:31 点 5 次没展开，原因待这行读数定）
+                // 点搜索按钮（鼠标那条：Button 自己的动作，原位展开；手柄确认走的是屏幕键盘，另有用例）
                 func toggleSearch() async throws {
+                    try await settleSearch()
                     let expanded = { navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
                     let before = expanded()
-                    for _ in 0..<5 {
-                        try await settleSearch()
-                        let target = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search" })
-                        let rect = window.convertFromScreen(target.frame)
-                        try click(CGPoint(x: rect.midX, y: rect.midY), in: window)
-                        for _ in 0..<100 where expanded() == before { try await Task.sleep(for: .milliseconds(20)) }
-                        if expanded() != before { return }
-                    }
-                    XCTFail("点 5 次搜索按钮都没切换：窗口是焦点窗口 \(window.isKeyWindow)，App 在前台 \(NSApp.isActive)")
+                    try press("home.search", navigation)
+                    try await waitUntil { expanded() != before }
                 }
-                let initialWindows = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
+                let initialWindows = Set(UIStage.shared.shownWindows.map(\.windowNumber))
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.filter" }, "首页不再显示重复的筛选按钮")
                 try await toggleSearch()
                 // Let the 240 ms capsule transition finish before the next mouse hit test.
@@ -1266,7 +1276,7 @@ import S2ArmAppleAdapter
                         && window.firstResponder is NSTextView
                 }
                 let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
-                XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
+                XCTAssertEqual(Set(UIStage.shared.shownWindows.map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
                 let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "鼠标展开后必须直接接受文本输入")
                 editor.insertText("Original", replacementRange: NSRange(location: NSNotFound, length: 0))
                 try await Task.sleep(for: .milliseconds(80))
@@ -1305,11 +1315,10 @@ import S2ArmAppleAdapter
                 navigation.focus("home.group.ready"); navigation.handle(.confirm)
                 XCTAssertEqual(fixture.model.home.group.rawValue, "ready")
                 fixture.model.home.group = .all
-                navigation.focus("home.more"); navigation.handle(.confirm)
-                try await waitUntil { navigation.activeWindow.map { menu in navigation.controlTargets(in: menu).contains { $0.id == "home.refresh" } } == true }
+                // 「…」菜单（SwiftUI popover）的项目与动作由 testHomeMoreMenuOffersShellIpaExportWithoutWindow 不开窗核对；这里不再真弹它：
+                //   不上屏的窗口弹不出 SwiftUI popover，原先等菜单落空后对着不存在的 home.refresh 按 A，焦点退回第一张卡片、点开了游戏，
+                //   下一轮渲染出的是游戏页、「没有 home.search」（门禁偶发红的同一条链，11-26）
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "top.library" })
-                navigation.focus("home.refresh"); navigation.handle(.confirm)
-                try await waitUntil { navigation.activeWindow === window && !fixture.model.loading }
             }
         }
     }
@@ -1354,7 +1363,7 @@ import S2ArmAppleAdapter
             navigation.source.controllers = { [] }
             let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original search fixture")
                 .frame(width: 1120, height: 630)), fixture: fixture, language: language)
-            window.makeKeyAndOrderFront(nil)
+            UIStage.show(window)
             navigation.attach(window); navigation.source.stop()
             defer { navigation.detach(); window.close() }
             let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
@@ -1398,7 +1407,8 @@ import S2ArmAppleAdapter
             let key = try XCTUnwrap(navigation.controlTargets(in: shortcutKeyboard.panel).first { $0.id == "pad.key.q" })
             let rect = shortcutKeyboard.panel.convertFromScreen(key.frame)
             let beforeClick = shortcutKeyboard.value
-            try click(CGPoint(x: rect.midX, y: rect.midY), in: shortcutKeyboard.panel)
+            try rawClick(CGPoint(x: rect.midX, y: rect.midY), in: shortcutKeyboard.panel)   // 经过搜索框的点外面监听：键盘面板上的点击不能让它收起
+            try press("pad.key.q", navigation)
             XCTAssertEqual(shortcutKeyboard.value, beforeClick + "q", "点击屏幕键盘不能使下方搜索收起")
             XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
             navigation.handle(.back)
@@ -1749,16 +1759,15 @@ import S2ArmAppleAdapter
                                            ["player": 2, "config": own, "source": "game", "problem": false],
                                            ["player": 3, "config": NSNull(), "source": "player1", "problem": false],
                                            ["player": 4, "config": NSNull(), "source": "player1", "problem": false]]
-        let (host, window) = try await render(AnyView(InputSettingsSheet(model: fixture.model, gameID: "fixture")), fixture: fixture, language: .zh, keyable: false)
+        let (host, window) = try await render(AnyView(InputSettingsSheet(model: fixture.model, gameID: "fixture")), fixture: fixture, language: .zh)
         let navigation = fixture.navigation
         navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
-        window.orderFront(nil)
+        UIStage.show(window)
         defer { navigation.detach(); window.close() }
         try await settle(window, navigation, fixture.model.gamepad)
         let players = navigation.controlTargets(in: window).filter { abs($0.frame.height - 30) < 0.5 }.sorted { $0.frame.minX < $1.frame.minX }
         XCTAssertEqual(players.count, 4)
-        let p2 = window.convertFromScreen(players[1].frame)
-        try click(CGPoint(x: p2.midX, y: p2.midY), in: window)
+        try press(players[1].id, navigation)
         try await Task.sleep(for: .milliseconds(200))
         try snapshotBottom(window, "input-manage-player2-zh")
         _ = host
@@ -2408,34 +2417,12 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testSettingsSheetCentersVerticallyInsideParentWindow() async throws {
-        let fixture = try SettingsFixture()
-        defer { fixture.remove() }
-        let host = NSHostingView(rootView: Text("Parent").frame(width: 1120, height: 630)
-            .sheet(isPresented: .constant(true)) {
-                EnvironmentView(model: fixture.model)
-                    .environmentObject(Localizer(.zh))
-            })
-        let parent = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 1120, height: 630),
-                              styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
-        parent.isReleasedWhenClosed = false
-        parent.toolbar = NSToolbar(identifier: "settings.center.test")
-        parent.toolbarStyle = .unified
-        parent.contentView = host
-        parent.orderBack(nil)
-        defer { parent.close() }
-        for _ in 0..<40 where parent.attachedSheet == nil { try await Task.sleep(for: .milliseconds(25)) }
-        let sheet = try XCTUnwrap(parent.attachedSheet, "设置页必须作为 sheet 挂到父窗口")
-        for _ in 0..<20 {
-            try await Task.sleep(for: .milliseconds(30))
-            if abs((parent.frame.maxY - sheet.frame.maxY) - (sheet.frame.minY - parent.frame.minY)) <= 2 { break }
-        }
-        let topGap = parent.frame.maxY - sheet.frame.maxY
-        let bottomGap = sheet.frame.minY - parent.frame.minY
-        print("settings-sheet parent=\(parent.frame) sheet=\(sheet.frame) topGap=\(topGap) bottomGap=\(bottomGap)")
-        XCTAssertGreaterThanOrEqual(bottomGap, 60, "设置弹窗底部不能贴着外窗口底边")
-        XCTAssertEqual(topGap, bottomGap, accuracy: 2, "设置弹窗应在外窗口中垂直居中")
+    /// 设置页这类弹窗在外窗口里垂直居中：靠 LauncherSheetSize.maxWindowHeight 把弹窗高度压在「父窗口高 − 136」以内（AppKit beginSheet 只在这个高度内居中）。
+    ///   单测不上屏，SwiftUI 的 sheet 不会真挂到父窗口（11-26），这里核规则本身；期望手算：630 − 136 = 494；400 − 136 = 264 低于下限取 360；没父窗口按屏幕 900 − 100 = 800
+    func testSettingsSheetCentersVerticallyInsideParentWindow() {
+        XCTAssertEqual(LauncherSheetSize.maxWindowHeight(parent: 630, screen: 900), 494)
+        XCTAssertEqual(LauncherSheetSize.maxWindowHeight(parent: 400, screen: 900), 360)
+        XCTAssertEqual(LauncherSheetSize.maxWindowHeight(parent: nil, screen: 900), 800)
     }
 
     private func exportArtworkBounds(_ host: NSView) throws -> CGRect {
@@ -2454,17 +2441,17 @@ import S2ArmAppleAdapter
         return CGRect(x: left, y: top, width: try XCTUnwrap(xs.max()) - left + 1, height: try XCTUnwrap(ys.max()) - top + 1)
     }
 
-    /// keyable: false 时用拿不到焦点的窗口（见 UnfocusableWindow），用例结果不随测试进程是不是前台程序变
-    private func render(_ page: AnyView, fixture: SettingsFixture, language: Lang, keyable: Bool = true) async throws -> (NSView, NSWindow) {
+    /// 窗口不上屏（UIStage）：结果不随桌面焦点 / 前台程序变
+    private func render(_ page: AnyView, fixture: SettingsFixture, language: Lang) async throws -> (NSView, NSWindow) {
         _ = NSApplication.shared
         let host = NSHostingView(rootView: page.environmentObject(Localizer(language))
             .environment(\.padControls, fixture.navigation).environment(\.colorScheme, .dark))
         host.appearance = NSAppearance(named: .darkAqua)
-        let window = (keyable ? NSWindow.self : UnfocusableWindow.self).init(contentRect: CGRect(origin: CGPoint(x: 80, y: 80), size: host.fittingSize),
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 80, y: 80), size: host.fittingSize),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        window.orderBack(nil)
+        UIStage.show(window)
         try await settle(window, fixture.navigation, fixture.model.gamepad)
         return (host, window)
     }
@@ -2560,11 +2547,6 @@ private struct SearchControlPreview: View {
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
-/// 永远不成为焦点窗口的测试窗口：点击直接交给控件、不先「激活窗口」，也就不会因别的窗口 / 程序拿走焦点而失焦
-private final class UnfocusableWindow: NSWindow {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
-}
 
 private final class SettingsRunner: JobProcessRunner {
     final class Handle: JobProcessHandle { func terminate() {} }

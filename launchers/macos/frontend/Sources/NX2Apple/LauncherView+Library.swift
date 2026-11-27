@@ -126,14 +126,14 @@ extension LauncherView {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         panel.prompt = BackendText.launcherText("export.location.choose", language: uiLanguage)
-        if panel.runModal() == .OK, let url = panel.url { model.moveGame(game, to: url) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { model.moveGame(game, to: url) }
     }
 
     func relinkGame(_ game: GameSummary) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.message = txt("library.missing.pick")
-        if panel.runModal() == .OK, let url = panel.url { model.relinkGame(game, folder: url) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { model.relinkGame(game, folder: url) }
     }
 
     /// 卡片和大图上的可用状态。设备签名的到期时间在设备操作区显示。
@@ -348,7 +348,7 @@ struct HeroUpdateLines: View {
         let panel = NSOpenPanel()
         panel.message = txt("update.relink.pick")
         panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { model.relinkSource(game, source: url) }
+        if LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url { model.relinkSource(game, source: url) }
     }
 
     @ViewBuilder var body: some View {

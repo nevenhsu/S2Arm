@@ -524,9 +524,9 @@ def to_extract(src, out, name=None, say=print):
         convert(src, dump, say)
         sys.stdout.flush()   # 日志里展开的行在 ns2_dump 的行前面（管道下 stdout 是块缓冲）
         return subprocess.run([sys.executable, '-X', 'utf8', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ns2_dump.py'),
-                               dump, out, '--name', name or default_name(src)]).returncode
+                               dump, out, '--name', name or default_name(src), '--consume']).returncode
     finally:
-        shutil.rmtree(dump, ignore_errors=True)   # 解包目录是从它克隆的（跨卷 / Windows 是真拷），留着白占一份
+        shutil.rmtree(dump, ignore_errors=True)   # 中间目录：散文件 / DLC 已被 --consume 挪进解包目录，余下（exefs 等）是克隆来源，留着白占一份
         shutil.rmtree(dump + '.tmp', ignore_errors=True)
 
 

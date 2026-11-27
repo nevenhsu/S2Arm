@@ -27,7 +27,7 @@ import threading
 import time
 import uuid
 from progress_activity import BatchActivity
-from errors import Failure, device_of, explain, failure_summary, last_output_lines, recovery, library_lock_failure
+from errors import Failure, device_of, estimate_low, explain, failure_summary, last_output_lines, recovery, library_lock_failure
 
 
 def default_developer_dir():
@@ -991,7 +991,8 @@ class Context:
     def describe_failure(self, error, severity="error", exit_code=None):
         failure = explain(error, **self.failure_roots())
         code = failure.code
-        result = dict(code=code, severity=severity, summary=self.redact(failure),
+        said = estimate_low(str(failure), getattr(self, "space_budget", None)) if code == "disk_full" else str(failure)   # 预检说够却写满：说清是预估偏低（#444）
+        result = dict(code=code, severity=severity, summary=self.redact(said),
                       suggestion=getattr(failure, "advice", None) or recovery(code, packaged=bool(self.r.get("engineBundle")), tv=str(getattr(self, "operation", "")).startswith("tv"), device=device_of(self)), detail="", stage=self.stage,
                       component="S2Arm", logPath=str(self.last_log) if self.last_log else None)
         if exit_code is not None:
@@ -1041,8 +1042,9 @@ class Context:
             self.last_log.write_text(self.redact(failure) + "\n" + (self.redact(failure.internal) + "\n" if getattr(failure, "internal", "") else ""))
         records = self.job["diagnostics"]
         previous = records[-1] if records else None
+        said = estimate_low(str(failure), getattr(self, "space_budget", None)) if failure.code == "disk_full" else str(failure)   # 同 describe_failure
         if (previous and previous["severity"] == "error" and previous["code"] == failure.code
-                and previous["summary"] == self.redact(failure)):
+                and previous["summary"] == self.redact(said)):
             if previous["logPath"] == (str(self.last_log) if self.last_log else None):
                 return previous
             records.pop()

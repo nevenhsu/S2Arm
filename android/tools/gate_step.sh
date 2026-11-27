@@ -18,7 +18,44 @@ s2a_gate_note() {
     fi
 }
 
+# 子项键（android/tools/gate_keys.tsv）：test.sh 定好 $out / $repo_dir 后调一次。门禁里（有摘要目录）或设了 GATE_ONLY 时启用：
+#   每步按表归键，没登记的步 = 红（新步要同笔在表里加 rule）；GATE_ONLY=<键…> 时名单外的键的步不跑。直接跑 test.sh、不设 GATE_ONLY：什么都不做
+s2a_gate_keys_init() {
+    S2A_GK_ON=
+    [ -n "${S2A_GATE_SUMMARY_FILE:-}" ] || [ -n "${GATE_ONLY:-}" ] || return 0
+    local tsv=$1 kind k frag
+    S2A_GK_K=(); S2A_GK_F=(); S2A_GK_RUN=0; S2A_GK_SKIP=0
+    while IFS=$'\t' read -r kind k frag; do
+        [ "$kind" = rule ] || continue
+        S2A_GK_K+=("$k"); S2A_GK_F+=("$frag")
+    done < "$tsv"
+    [ "${#S2A_GK_K[@]}" -gt 0 ] || { s2a_gate_note "【红】安卓门禁子项键表 ${tsv} 读不出规则"; return 1; }
+    for k in ${GATE_ONLY:-}; do
+        case " ${S2A_GK_K[*]} " in *" $k "*) ;; *) s2a_gate_note "【红】安卓门禁 GATE_ONLY 键 ${k} 认不得（见 android/tools/gate_keys.tsv）"; return 1;; esac
+    done
+    S2A_GK_ON=1
+}
+
+# 一步的键：命令去掉仓库根前缀、$out 写回字面、空白压成一个空格后，表里第一条片段是它子串的规则（与 gate_keys.py key_of 同一口径）
+s2a_gate_key_of() {
+    local c="$*" i
+    c=${c//"$repo_dir"\//}; c=${c//"$out"/'$out'}; c=${c//$'\n'/ }; c=${c//$'\t'/ }
+    while [[ $c == *'  '* ]]; do c=${c//'  '/ }; done
+    for i in "${!S2A_GK_F[@]}"; do
+        if [[ $c == *"${S2A_GK_F[$i]}"* ]]; then S2A_GK_KEY=${S2A_GK_K[$i]}; return 0; fi
+    done
+    S2A_GK_KEY=; S2A_GK_CMD=$c; return 1
+}
+
 s2a_gate_step() {
+    if [ -n "${S2A_GK_ON:-}" ]; then
+        if ! s2a_gate_key_of "$@"; then
+            s2a_gate_note "【红】安卓门禁步没有登记子项键：${S2A_GK_CMD:0:160}（在 android/tools/gate_keys.tsv 加 rule 行）"
+            return 1
+        fi
+        if [ -n "${GATE_ONLY:-}" ] && [[ " $GATE_ONLY " != *" $S2A_GK_KEY "* ]]; then S2A_GK_SKIP=$((S2A_GK_SKIP + 1)); return 0; fi
+        S2A_GK_RUN=$((S2A_GK_RUN + 1))
+    fi
     # Direct test.sh users retain its original stdout/stderr and exit semantics.
     if [ -z "${S2A_GATE_SUMMARY_FILE:-}" ]; then "$@"; return $?; fi
     local log rc first last cmd

@@ -140,10 +140,13 @@ static struct scene tex_log_scene(int log_on, int write_tex3, int wrap) {
     g_block_mem = (uint8_t *)(((uintptr_t)g_block_arena + BLOCK_TEST_ALIGN - 1) & ~(uintptr_t)(BLOCK_TEST_ALIGN - 1));
     memset(g_block_gen, 0, sizeof g_block_gen);
     nvn_be_sub_begin();
+    g_tp.mem = g_block_mem;
+    g_tp.size = BLOCK_TEST_PAGES * PG;
     tex_t t[SC_N];
     for (int i = 0; i < SC_N; i++) {
         t[i] = mk_tex(950 + (uint64_t)i, 0, NVN_FORMAT_RGBA8, SC_W, SC_H, 1, 0);
-        t[i].mem = g_block_mem + (size_t)i * t[i].L.size;   // 各占 16 页：贴图 i 在第 16i..16i+15 页
+        t[i].off = (int64_t)(i * t[i].L.size);
+        t[i].mem = g_tp.mem + t[i].off;   // 各占 16 页：贴图 i 在第 16i..16i+15 页
         memset(t[i].mem, 0x30 + i, t[i].L.size);
         const size_t up = (size_t)i * (t[i].L.size / PG) + 2;
         if (g_sc_unarmed && i == 4) { g_log_unarmed[up] = 1; if (g_sc_unarmed == 2) g_block_gen[up] = g_dirty_now; }

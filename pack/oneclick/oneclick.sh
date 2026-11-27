@@ -121,8 +121,10 @@ PY=${S2A_PYTHON:-${S2A_PY:-$(bash "$P/../tools/machine.sh" get S2A_PY 2> /dev/nu
 for c in /Applications/S2Arm.app/Contents/Resources/Runtime/python/bin/python3 "$HOME/Applications/S2Arm.app/Contents/Resources/Runtime/python/bin/python3"; do
   [ -n "$PY" ] || { [ -x "$c" ] && PY=$c; }; done
 [ -n "$PY" ] || PY=$(command -v python3 || true)
-[ -n "$PY" ] || die "没有 Python 3：装 Python 3.11+，或用 S2A_PYTHON=<解释器> 指定（S2Arm.app 里的 Contents/Resources/Runtime/python/bin/python3 也行）"
-"$PY" -c "import sys; assert sys.version_info >= (3, 11)" 2> /dev/null || die "${PY} 版本低于 3.11：装 Python 3.11+ 或装 S2Arm.app（自带钉版 Python），或用 S2A_PYTHON=<解释器> 指定。装不进包（externally-managed / uv 托管）就建虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"
+PYMIN=$(sed -n 's/^PYTHON_MINIMUM = (\([0-9]*\), \([0-9]*\)).*/\1.\2/p' "$P/jobs/toolchain.py")   # 作业层最低版本的唯一出处（toolchain.PYTHON_MINIMUM）
+[ -n "$PYMIN" ] || die "读不到 pack/jobs/toolchain.py 的 PYTHON_MINIMUM"
+[ -n "$PY" ] || die "没有 Python 3：装 Python ${PYMIN}+，或用 S2A_PYTHON=<解释器> 指定（S2Arm.app 里的 Contents/Resources/Runtime/python/bin/python3 也行）"
+"$PY" -c "import sys; assert sys.version_info >= tuple(map(int, '${PYMIN}'.split('.')))" 2> /dev/null || die "${PY} 版本低于 ${PYMIN}：装 Python ${PYMIN}+ 或装 S2Arm.app（自带钉版 Python），或用 S2A_PYTHON=<解释器> 指定。装不进包（externally-managed / uv 托管）就建虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"
 "$PY" -c "import capstone, lz4, numpy, PIL" 2> /dev/null || die "${PY} 缺出包要的 Python 包：${PY} -m pip install -r launchers/macos/requirements-runtime.txt（与 S2Arm.app 内置 Python 同一份钉版清单）。装不进包（externally-managed / uv 托管）就建虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"
 #   选定的解释器所在目录放到 PATH 最前（#447 评审，照启动器 pack/jobs/core.py 的 env() 做）：出包链各 .sh 里的裸 python3 都落到这一个解释器，
 #   不会在装了 anaconda 的机器上拿到 PATH 最前面那个 3.9（缺包 / 版本不对，在后面某个阶段再停）

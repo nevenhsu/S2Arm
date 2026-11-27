@@ -1457,6 +1457,55 @@ def _gb(n):
     return f"{n / 1e9:.0f} GB" if n >= 10e9 else f"{n / 1e9:.1f} GB"
 
 
+def nup_unpack_bytes(c, packages, cluster):
+    """NUP 原件解成的解包目录（pack/ns2_nup.py --to-extract → pack/ns2_dump.py）在分配单元为 cluster 字节的卷上实际要占多少：读容器目录表（不解包，
+    时之笛 25 GB 的 NUP 约 0.4 秒），按 ns2_dump 的同一套选法——exefs 取最新更新的（没有取本体）；romfs 全量用更新、差量本体叠更新；镜像形态（缺省）
+    romfs 是一个 romfs.std 文件，S2A_ROMFS_IMAGE=0 是散文件；DLC 一律散文件——每个文件按簇向上取整、每个目录占一簇（同 _size_on，#1112）。
+    cluster ≤ 0（读不到）按原始大小。没有 NUP / 读不了 → None（预算照原件大小算）。#444：exFAT 1 MB 簇的外接盘上，解包中间目录与解包目录两份
+    共 5 万个文件、13.4 GB，实占 59 GB；按原件 8.9 GB × 1.1 估出 9.8 GB 放行，出到一半盘满"""
+    main = next((p for p in packages if p.get("format") == "nup" and p["type"] == "update"), None) \
+        or next((p for p in packages if p.get("format") == "nup"), None)
+    if main is None:
+        return None
+    nup, dump = engine_tool(c, "ns2_nup"), engine_tool(c, "ns2_dump")
+    up = (lambda n: -(-n // cluster) * cluster) if cluster > 0 else (lambda n: n)
+    one = max(cluster, 0)   # 一个目录占的簇
+    try:
+        with nup.Nup(str(source_path(c, main))) as n:
+            _, base, vers, dlc = nup.scan(n)
+            upd = vers.get(max(vers, default=0))
+
+            def alloc(d):   # 目录 d 下整棵树作散文件写盘的实占（不含 d 自己）
+                return sum(alloc(i) + one if isdir else up(n.files[i][1]) for _, isdir, i in n.children(d))
+
+            def files(d, pre=""):   # 相对路径 → (字节, SHA-256)：ns2_dump.same_file 判全量 / 差量用
+                out = {}
+                for raw, isdir, i in n.children(d):
+                    rel = pre + nup.safe_name(n, raw)
+                    if isdir:
+                        out.update(files(i, rel + "/"))
+                    else:
+                        out[rel] = (n.files[i][1], "", 0, 0, "", n.files[i][2].hex())
+                return out
+            ex = upd if upd is not None and upd.exefs != nup.NO_DIR and n.child(upd.exefs, b"main") is not None else base
+            total = one + (alloc(ex.exefs) + one if ex is not None and ex.exefs != nup.NO_DIR else 0)
+            rb = files(base.romfs) if base is not None and base.romfs != nup.NO_DIR else {}
+            ru = files(upd.romfs) if upd is not None and upd.romfs != nup.NO_DIR else {}
+            rom = ru if ru and (not rb or dump.same_file(rb, ru)) else {**rb, **ru}
+            if dump.image_mode():
+                total += up(sum(v[0] for v in rom.values()))
+            else:
+                dirs = set()   # romfs/ 下每一级目录各占一簇
+                for rel in rom:
+                    parts = rel.split("/")[:-1]
+                    dirs.update("/".join(parts[:k]) for k in range(1, len(parts) + 1))
+                total += sum(up(v[0]) for v in rom.values()) + one * (len(dirs) + 1)
+            total += sum(alloc(k.romfs) + one for k in dlc.values() if k.romfs != nup.NO_DIR)
+            return total
+    except (nup.Error, OSError, ValueError):
+        return None
+
+
 def _unpacked_on_disk(c, game):
     """这款的解包目录已完整在盘上（物理事实，不是历史记录）"""
     from build import extract_valid   # build 顶层 import 本模块，这里函数内取
@@ -1477,13 +1526,17 @@ def space_budget(c, game):
     clones = False if os.name != "nt" and fmt and fmt != "apfs" else None   # 读到是非 APFS（HFS+ 等）才按不克隆多算一份；读不到按 APFS（不多算、不拦）
     links = not (os.name == "nt" and fmt and fmt not in ("ntfs", "refs"))   # Windows exFAT / FAT32：建不了目录链接，多两份（space_rule）
     keep = getattr(c, "r", {}).get("followUp") is True   # 同一款接着还要出别的平台：解包留着，写 IMG 不边写边删（ipa.to_img）
-    copy_need = pack_need_bytes(packages, unpacked=unpacked, image=image, clones=clones, links=links, keep_unpack=keep) - direct_need
+    cluster = volume_cluster(loc)
+    tree = nup_unpack_bytes(c, packages, cluster)   # NUP：解包目录在存放位置那块盘上的实占（按分配单元）；别的格式 None = 按原件大小
+    copy_need = pack_need_bytes(packages, unpacked=unpacked, image=image, clones=clones, links=links, keep_unpack=keep, unpack_bytes=tree) - direct_need
+    one = (size if tree is None else tree) * 11 // 10   # 解包目录一份
+    by_cluster = tree is not None and cluster >= (64 << 10) and not unpacked   # 大簇盘上 NUP 按实占算：说明里写出分配单元
     img_extra = image and (keep or unpacked)
     # 分项之间用「；」：两端翻译按「；」拆开逐项翻（BackendText.translate），用「，」会整串翻不了（11-14 i18n）
-    unpack_note = f"解包 {'已在盘上' if unpacked else _gb(size * 11 // 10)}" + \
+    unpack_note = (f"解包 {_gb(one)}（按这块盘 {cluster // 1024} KB 的分配单元逐文件算）" if by_cluster else f"解包 {'已在盘上' if unpacked else _gb(one)}") + \
         (f"；单一 IMG {_gb(size)}" if img_extra else "；单一 IMG 边写边腾解包、不另占" if image else "") + \
-        (f"；{fmt.upper()} 盘不能克隆、资源包另占 {_gb(size * 11 // 10)}" if clones is False else "") + \
-        (f"；{fmt.upper()} 盘建不了目录链接、另占 {_gb(2 * (size * 11 // 10))}" if not links else "")
+        (f"；{fmt.upper()} 盘不能克隆、资源包另占 {_gb(one)}" if clones is False else "") + \
+        (f"；{fmt.upper()} 盘建不了目录链接、另占 {_gb(2 * one)}" if not links else "")
     direct_note = f"直连着色器上限 {_gb(direct_need)}"
     if loc.stat().st_dev == cache.stat().st_dev:
         parts = [("library", loc, copy_need + direct_need, f"{unpack_note}；{direct_note}")]
@@ -1568,6 +1621,7 @@ def check_pack_space(c, game, *, compiler_policy=None):
     if override and any(not v["enough"] for v in budget["volumes"]):
         budget["override"] = True   # 失败页据此不再给「仍然继续」（这次已经是继续过的）
     c.emit("space", "空间预检", space=budget)
+    c.space_budget = budget   # 出到一半写满时，失败原因据此说清是不是预估偏低（errors.estimate_low，Context.describe_failure）
     for v in budget["volumes"]:
         if v["enough"]:
             continue

@@ -20,12 +20,14 @@ Switch 2 游戏现在拿到手的形态是主机上导出的松散目录（11-04
                            （字段与取值同 11-03 火纹合成件，那份在 Mac / 测试设备2 实玩过）
     unpack.tsv             title_id / name / name_zh / display_version / update / base / builds / aoc
 程序号从 base/exefs/main.npdm 的 ACI0 读，不看目录名。文件一律 APFS 克隆（不占新空间），跨卷才真拷。
+--consume：导出目录是调用方的中间目录、整理完就整棵删（pack/ns2_nup.py --to-extract 展开的那份）：romfs 散文件与 DLC 同盘挪过去、不留第二份
+  （#444：exFAT 1 MB 簇的外接盘上克隆不了，中间目录与解包目录两份同时在盘上、共 5 万个文件、各占约 29 GB）；挪不了（跨卷等）才照常克隆 / 拷。玩家自己的导出目录不传。
 同一形态的 MIT 做法见 the reference port scripts/pack_dump.py（seedds/the reference port 777a5f6c，源自 d2r-mobile）：更新 romfs 是打过补丁的全量、单独用。
 先写 <out>.tmp，成功才改名；<out>/.ns2_dump_key = 源清单（路径 字节 修改时间）+ 本脚本内容的哈希，相同就复用不重做。
 
 用法：
     ns2_dump.py --detect <目录>                 是导出目录就打印程序号、退出 0；不是退出 1
-    ns2_dump.py <导出目录> <输出解包目录> [--name <款名>] [--base <本体目录>]   本体在别处（散文件解包目录）：<导出目录> 可以是空目录
+    ns2_dump.py <导出目录> <输出解包目录> [--name <款名>] [--base <本体目录>] [--consume]   本体在别处（散文件解包目录）：<导出目录> 可以是空目录
 """
 import ctypes
 import hashlib
@@ -91,6 +93,18 @@ def clone(src, dst):
     if _libc is not None and _libc.clonefile(src.encode(), dst.encode(), 0) == 0:
         return
     shutil.copy2(src, dst)   # 跨卷 / 非 APFS：真拷
+
+
+def take(src, dst, consume):
+    """src 放到 dst：consume（来源是用完即删的中间目录）先同盘改名挪过去，不占第二份；否则 / 挪不了照 clone"""
+    if consume:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            os.rename(src, dst)
+            return
+        except OSError:
+            pass
+    clone(src, dst)
 
 
 def normalize_exefs(exsrc, dst, tid, nxu=None):
@@ -366,7 +380,7 @@ def src_key(dump, base=None):
     return h.hexdigest()[:16]
 
 
-def convert(dump, out, name=None, base=None):
+def convert(dump, out, name=None, base=None, consume=False):
     base = base or os.path.join(dump, 'base')
     try:
         tid = read_tid(os.path.join(base, 'exefs', 'main.npdm'))
@@ -423,7 +437,7 @@ def convert(dump, out, name=None, base=None):
         red('这份 NUP 是按镜像形态展开的（只有 romfs.nupmap），整理也要镜像形态：别设 S2A_ROMFS_IMAGE=0')
     else:
         for rel, a in rom.items():
-            clone(a, os.path.join(tmp, 'romfs', rel))
+            take(a, os.path.join(tmp, 'romfs', rel), consume)
 
     # DLC：序号 = DLC 标题号 − 控制分区里的 AddOnContentBaseId（ns2_nup.aoc_base，运行时同口径；没带控制分区按应用号 + 0x1000）
     real = find_control([upd, base] if upd else [base])
@@ -446,10 +460,11 @@ def convert(dump, out, name=None, base=None):
             aoc_rows.append(f'{idx}\t{atid:016x}\t0\t-1\t0')
             continue
         fs = walk(rd)
+        nbytes = sum(os.path.getsize(a) for a in fs.values())   # 挪之前量（--consume 挪走后来源就不在了）
         for rel, a in fs.items():
-            clone(a, os.path.join(tmp, 'aoc', str(idx), rel))
+            take(a, os.path.join(tmp, 'aoc', str(idx), rel), consume)
         aoc_idx.append(idx)
-        aoc_rows.append(f'{idx}\t{atid:016x}\t{vs[-1] if vs else 0}\t{len(fs)}\t{sum(os.path.getsize(a) for a in fs.values())}')
+        aoc_rows.append(f'{idx}\t{atid:016x}\t{vs[-1] if vs else 0}\t{len(fs)}\t{nbytes}')
     with open(os.path.join(tmp, 'aoc.tsv'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('idx\ttitle_id\tversion\tfiles\tbytes\n' + ''.join(r + '\n' for r in aoc_rows))
 
@@ -493,6 +508,8 @@ def main(a):
         print(f'{read_tid(os.path.join(d, "base", "exefs", "main.npdm")):016X}\t{d}')
         return 0
     name = base = None
+    consume = '--consume' in a
+    a = [x for x in a if x != '--consume']
     if '--base' in a:   # 本体目录（exefs/ + romfs/）在别处：作业层导入的散文件解包目录直接交进来，不再链接成 <导出目录>/base（玩家诊断 #0fd185：链接可能建不了）
         i = a.index('--base')
         base = os.path.abspath(a[i + 1])
@@ -509,11 +526,11 @@ def main(a):
             red(f'{base} 不是本体目录（要有 exefs/main.npdm）')
         if not os.path.isdir(a[0]):
             red(f'{a[0]} 不是目录')
-        return convert(os.path.abspath(a[0]), os.path.abspath(a[1]), name, base)
+        return convert(os.path.abspath(a[0]), os.path.abspath(a[1]), name, base, consume)
     d = find_dump(a[0]) if os.path.isdir(a[0]) else None
     if not d:
         red(f'{a[0]} 不是 Switch 2 导出目录（要有 base/exefs/main.npdm）')
-    return convert(d, os.path.abspath(a[1]), name)
+    return convert(d, os.path.abspath(a[1]), name, consume=consume)
 
 
 if __name__ == '__main__':

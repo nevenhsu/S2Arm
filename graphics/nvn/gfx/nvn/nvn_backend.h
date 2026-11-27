@@ -39,7 +39,7 @@
 extern "C" {
 #endif
 
-#define NVN_GPU_CONTRACT_VERSION 25   // 改任何签名或语义 +1；两个后端与核心同批改，t_nvn_backend.c 的签名表同批改
+#define NVN_GPU_CONTRACT_VERSION 26   // 改任何签名或语义 +1；两个后端与核心同批改，t_nvn_backend.c 的签名表同批改
 /* 定稿 #1（调用形式）：链接期直接调用 nvn_gpu_*。每个平台构建只链一个后端，Metal 3 / 4 的选择留在 Metal 后端内部。
    理由：零间接、可内联；同进程 A/B 对照没有真实消费者，不为它新增注册实体（vickwv 同意）。 */
 
@@ -238,6 +238,9 @@ int nvn_gpu_tex_bc1_unwrap(nvn_gpu_cmd c, nvn_gpu_tex t, nvn_gpu_tex *replacemen
 void nvn_gpu_tex_release(nvn_gpu_tex t);
 // 视图：v 为 NVN 视图记录原样，NULL = 默认视图。视图让贴图存储活到视图 release。线程：[任意]。出错：格式不兼容或缺 VIEW_FMT → NVN_GPU_E_ARG。
 nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex t, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err);
+// 可选：建立单级单层颜色附件，按请求的格式写入，分量恒等，仅用于附件。持有贴图引用直到视图释放。线程：[任意]。
+// 不兼容、贴图未声明该格式/用途或设备不支持时返回 NVN_GPU_E_UNSUPPORTED，不换用基底或等宽替代格式。
+nvn_gpu_rc nvn_gpu_view_create_color_attachment(nvn_gpu_tex t, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err);
 // 缓冲视图（TBUF / IMAGE_TBUF 的唯一绑定形态，#784 定稿 11-06）：格式来自着色器句柄解析到的 NVN 贴图对象（target = BUFFER，游戏 nvnTextureBuilderSetFormat /
 //   SetSize1D 定的 d.format / d.width），由核心经 texture pool 解析后传进来、按「存储 + 格式」缓存复用；SPIR-V 的 ImageFormat=Unknown 不承载格式，后端不从着色器猜。
 //   约束：nvn_format 用作 TBUF 须有 NVN_GPU_FMT_SAMPLE、用作 IMAGE_TBUF 须有 NVN_GPU_FMT_STORAGE（Vulkan：UNIFORM / STORAGE_TEXEL_BUFFER 格式特性）；

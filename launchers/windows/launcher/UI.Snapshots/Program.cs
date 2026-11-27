@@ -97,7 +97,7 @@ static LibraryCatalog MockCatalog(bool keysReady = true)
 static EnvironmentReport FakeReport(bool ready) => EnvironmentReport.Parse(
     ready
     ? "{\"schema\":1,\"ready\":true,\"checks\":[{\"id\":\"host\",\"name\":\"Windows 64位\",\"status\":\"ok\",\"ok\":true,\"message\":\"就绪\",\"code\":null,\"action\":null}]}"
-    : "{\"schema\":1,\"ready\":false,\"checks\":[{\"id\":\"python\",\"name\":\"Python\",\"status\":\"missing\",\"ok\":false,\"message\":\"需要 Python 3.11\",\"code\":\"python_missing\",\"action\":\"安装 Python\",\"url\":\"https://www.python.org\"}]}",
+    : "{\"schema\":1,\"ready\":false,\"checks\":[{\"id\":\"python\",\"name\":\"Python\",\"status\":\"missing\",\"ok\":false,\"message\":\"需要 Python 3.12\",\"code\":\"python_missing\",\"action\":\"安装 Python\",\"url\":\"https://www.python.org\"}]}",
     ready ? 0 : 1);
 
 var welcome = new EnvironmentWindow();

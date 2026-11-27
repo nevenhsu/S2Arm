@@ -464,7 +464,8 @@ SDK_SIM_MAPPING = Path.home() / "Library/Developer/Xcode/SDKToSimulatorIndexMapp
 BYTE_SCALE = {"b": 1, "kb": 1000, "mb": 1000 ** 2, "gb": 1000 ** 3, "tb": 1000 ** 4}   # 与 ByteCountFormatter(.file) 一致，也和 xcodebuild 打印的 8.32 GB 对得上
 HFS_NOTE = "游戏库在 Mac OS 扩展（HFS+）格式的磁盘上：可以出包，但这种盘不能克隆，出包会多占一份资源包的空间。"   # v0.3.1 放开 HFS+
 EXFAT_NOTE = "游戏库在 exFAT 格式的磁盘上：可以出包，但这种盘不能克隆，出包会多占一份资源包的空间。"   # v0.3.1 放开 exFAT（外部 PR #395）
-PYTHON_MINIMUM = (3, 11)   # 作业层要的 Python 最低版本：预检（preflight）与 Windows 环境检查（winenv 直接读这个常量）同一份
+PYTHON_MINIMUM = (3, 12)   # 作业层要的 Python 最低版本，唯一出处：预检（preflight）、Windows 环境检查（winenv）、applenv、oneclick.sh / stage_rewrite.sh（从这一行读）、
+#   tools/py_min_syntax_lint.py 都读它。= 随包 Python 的大版本（Mac python-build-standalone 3.12、Windows 3.12），11-26 维护者定
 
 
 # xcodebuild 按系统区域输出小数点或小数逗号；不能把 46,2% 的后半截读成 2%。

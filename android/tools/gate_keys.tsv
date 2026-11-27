@@ -1,0 +1,145 @@
+# 安卓门禁子项键（android/gate.sh 按 GATE_ONLY=<键…> 只跑这些键的步；tools/gate_keys.py 读这份表）。
+# 每个 s2a_gate_step 的命令（仓库根前缀去掉、$out 写成字面 $out）从上往下找第一条「片段」是它子串的规则，归那条的键：
+#   一步恰好一个键（先中者得）；没有规则中的步 = 红（门禁里跑整套时当场红，tests 里的 gate_keys 单测也红），新步必须同笔登记；
+#   一条规则一步都没中 = 陈旧规则，单测红。同一个 $out/<名> 的生产步与消费步必须同键（单测核），只跑一个键时前置产物不会缺。
+# 各键的输入都是整个钩子路由（android/gate.sh「# 门禁路由：」），不分键声明：理由与实测见 gate_keys.py 文件头。
+# 格式：rule<TAB>键<TAB>片段
+# 键：shader-withdraw shader-modes shader-misc dq runtime-host runtime-core replay link-compiler app
+
+
+# —— 取程序池：--withdraw 单独一键（单步约 310 秒），其余模式一键
+rule	shader-withdraw	android/tests/nvk_shader_pool_test.py --withdraw
+rule	shader-modes	android/tests/nvk_shader_pool_test.py
+
+# —— 双队列
+rule	dq	android/tests/run_dq_queue.sh
+
+# —— 回放层（仓库根 graphics/nvn 的变异对照 + 纹理缓冲回放 / 事实表）
+rule	replay	graphics/nvn/tests/
+rule	replay	android/tests/tbuf_replay_core_test.py
+rule	replay	android/tests/tbuf_facts_test.py
+rule	replay	android/tests/replay_exec_time_test.py
+rule	replay	android/tests/w2_observation_core_test.py
+
+# —— 链接与编译链
+rule	link-compiler	android/core-link/link_symbols.py
+rule	link-compiler	android/core-link/tests/t_link_symbols.py
+rule	link-compiler	android/core-link/test_game_core_closure.py
+rule	link-compiler	android/native/runtime/fault/tests/run_xstack_link.py
+rule	link-compiler	android/native/runtime/fault/tests/run_objects.py
+rule	link-compiler	android/tests/host_link_test.py
+rule	link-compiler	android/tests/gs_compiler_chain_test.py
+rule	link-compiler	android/tests/tbuf_compiler_chain_test.py
+rule	link-compiler	android/tests/w2_compute_program_test.py
+rule	link-compiler	android/tests/w2_compute_request_test.py
+rule	link-compiler	android/tests/direct_compute_identity_test.py
+rule	link-compiler	android/tests/direct_input_identity_
+rule	link-compiler	android/tests/direct_compile_request_host_test.py
+rule	link-compiler	android/tests/compile_inflight_test.py
+rule	link-compiler	android/tests/t_spv_
+rule	link-compiler	$out/spv
+rule	link-compiler	android/tests/generic_compile_events_test.py
+rule	link-compiler	android/tests/compile_events_reader_test.py
+
+# —— 着色器其余（取程序预热 / 管线 / 程序库包 / 别名 / 关停）
+rule	shader-misc	android/tests/libpack_
+rule	shader-misc	android/tests/nvk_shader_alias_test.py
+rule	shader-misc	android/tests/nvk_shutdown_test.py
+rule	shader-misc	android/tests/nvk_session_budget_test.py
+rule	shader-misc	android/tests/nvk_game_profile_test.py
+rule	shader-misc	android/tests/nvk_shown_timing_test.sh
+rule	shader-misc	android/tests/nvk_flag_cache_test.sh
+rule	shader-misc	android/tests/nvk_border_nearest_test.sh
+rule	shader-misc	android/tests/vk_warm_
+rule	shader-misc	android/tools/nvn_warm_test.sh
+rule	shader-misc	android/tools/nvk_prog_warm_
+rule	shader-misc	android/tools/nvk_warm_modules_test.sh
+rule	shader-misc	android/tools/nvk_pipe_
+rule	shader-misc	android/tools/nvn_vk_pipe_demand_test.sh
+rule	shader-misc	android/tools/nvk_shader_lease_test.sh
+rule	shader-misc	android/tests/direct_batch_test.py
+rule	shader-misc	android/tests/direct_prepare_test.py
+rule	shader-misc	android/tests/shader_pack_test.py
+rule	shader-misc	android/tests/direct_library_test.py
+rule	shader-misc	android/tests/direct_pack_test.py
+
+# —— 宿主原生：CMake / ctest、Vulkan 后端宿主单测、NVN 宿主 C 单测、多线程宿主套件
+rule	runtime-host	-DCMAKE_BUILD_TYPE=Debug
+rule	runtime-host	--build $out --parallel
+rule	runtime-host	--output-on-failure --timeout 30
+rule	runtime-host	android/tests/threaded_host_suites.sh
+rule	runtime-host	android/tools/nvn_vk_
+rule	runtime-host	android/tools/vk_poolahb_alias_test.sh
+rule	runtime-host	android/tests/vk_dev_ext_test.sh
+rule	runtime-host	android/tests/vk_api_floor_test.sh
+rule	runtime-host	android/tests/caps_shape/run.sh
+rule	runtime-host	android/tests/devprofiles/lint_test.sh
+rule	runtime-host	android/tests/vulkan_modules_test.py
+rule	runtime-host	android/../graphics/vulkan/wsi/tests/startup_surface_test.py
+rule	runtime-host	android/tests/host_fields_test.c
+rule	runtime-host	$out/host-fields-test
+rule	runtime-host	android/tests/nvn_vk_format_test.c
+rule	runtime-host	$out/nvn-vk-format-test
+rule	runtime-host	android/tests/ts_queue_test.c
+rule	runtime-host	$out/ts-queue-test
+rule	runtime-host	android/tests/nvk_land_auto_test.c
+rule	runtime-host	$out/land-auto-test
+rule	runtime-host	android/tests/report_ts_test.c
+rule	runtime-host	$out/report-ts-test
+rule	runtime-host	android/tests/gs_path_test.c
+rule	runtime-host	$out/gs-path-test-
+rule	runtime-host	android/tests/capprobe_
+rule	runtime-host	$out/fakeapk
+rule	runtime-host	android/tests/capacity/
+rule	runtime-host	$out/capacity-policy-test
+rule	runtime-host	android/tests/mutex_timedlock_test.py
+rule	runtime-host	android/tests/host_output_isolation_test.py
+rule	runtime-host	android/tests/threaded_python_selection_test.py
+rule	runtime-host	android/tests/copy_3d_depth_test.py
+rule	runtime-host	android/tests/guest_window_crop_test.py
+rule	runtime-host	android/tools/cmake_pick_test.sh
+
+# —— 运行时核心：core-link 运行时夹具、native/runtime、存档 / 退出 / 关停、故障栈、键盘 / 帧率 / 指标
+rule	runtime-core	android/core-link/runtime-tests/
+rule	runtime-core	android/core-link/provider-tests/
+rule	runtime-core	android/core-link/alt-tests/
+rule	runtime-core	android/native/runtime/
+rule	runtime-core	android/native/direct-vk-tests/
+rule	runtime-core	runtime/tests/support/
+rule	runtime-core	android/tests/emul_sp_android_test.c
+rule	runtime-core	android/tests/exit_order_test.sh
+rule	runtime-core	android/tests/save_atomic_
+rule	runtime-core	android/tests/stage_a0_test.sh
+rule	runtime-core	android/tests/diagnostics/run.sh
+rule	runtime-core	android/tests/cf_dictionary_test.sh
+rule	runtime-core	android/cs/
+rule	runtime-core	android/core-runtime/
+rule	runtime-core	graphics/track/tests/drain_readflush/
+rule	runtime-core	android/tools/generic_frame_trace_test.sh
+rule	runtime-core	android/tools/system_power_test.sh
+rule	runtime-core	android/tools/frame_rate_vote_test.sh
+rule	runtime-core	android/tools/system_tuning_test.sh
+rule	runtime-core	android/tools/power_state_test.sh
+rule	runtime-core	android/tests/direct_framelog_test.py
+rule	runtime-core	android/tests/direct_trace_test.py
+rule	runtime-core	android/tests/direct_game_mode_test.py
+rule	runtime-core	android/tests/device_lock_test.py
+rule	runtime-core	android/tests/device_round_test.py
+rule	runtime-core	android/tests/run_manifest_test.py
+rule	runtime-core	android/tests/game_process_manifest_test.py
+rule	runtime-core	android/tests/job_contract_test.py
+rule	runtime-core	android/tests/s2a_yuvdiff_test.py
+rule	runtime-core	android/tests/qa_self_test.sh
+rule	runtime-core	android/tests/direct_qa_compare_test.py
+
+# —— 应用层：全部 Java 单测（共用 $out/java）、应用 Python 单测、出包 / 安装 / 编解码 / 改写器 / 体检
+rule	app	mkdir -p $out/java
+rule	app	mkdir -p $out/host-keyboard
+rule	app	javac
+rule	app	java -
+rule	app	android/contracts
+rule	app	android/codecs/
+rule	app	android/doctor/
+rule	app	android/native/jni_abi.py
+rule	app	android/tests/
+rule	app	android/tools/test_compare_apks.py

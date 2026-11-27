@@ -749,7 +749,7 @@ class WinenvReadsRealSource(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location("winenv_real", JOBS / "winenv.py")
         m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-        self.assertEqual(m._python_minimum(), (3, 11))   # 手写期望：toolchain.preflight 现写的下限
+        self.assertEqual(m._python_minimum(), (3, 12))   # 手写期望：toolchain.preflight 现写的下限
 
 
 class Clone(unittest.TestCase):

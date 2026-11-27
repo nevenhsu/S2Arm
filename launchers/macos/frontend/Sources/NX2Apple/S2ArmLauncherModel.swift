@@ -1721,7 +1721,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     ///   弹一行原因（标题按 titleKey，正文是后端 / 系统给的原因句）；值保持原样，不拿失败当结果。
     ///   passive（打开页面时的被动刷新）：同一类连续失败只报头一次，成功一次后复位（readOK）
     /// 弹提示框的出口：生产照常 runModal；单测注入成记录（单测里走到真 NSAlert 会在开发机桌面弹窗、并把那条用例卡住等人点，11-16）
-    var runAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    var runAlert: (NSAlert) -> NSApplication.ModalResponse = { LauncherWindowPresenter.current.runAlert($0) }
 
     func reportFailure(_ titleKey: String, _ error: Error, passive: Bool = false) {
         if passive { guard failingReads.insert(titleKey).inserted else { return } }

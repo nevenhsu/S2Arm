@@ -34,23 +34,23 @@ import XCTest
         let presenter = LauncherTooltipPresenter.forWindow(window)
         let keyWindow = NSApp.keyWindow
         presenter.show(for: first)
-        let panel = try XCTUnwrap(window.childWindows?.first)
-        XCTAssertTrue(panel.isVisible, "提示在调用栈内出现，不依赖系统或异步计时器")
+        let panel = try XCTUnwrap(UIStage.shared.children(of: window).first)
+        XCTAssertTrue(UIStage.shared.isShown(panel), "提示在调用栈内出现，不依赖系统或异步计时器")
         XCTAssertTrue(panel.ignoresMouseEvents)
         XCTAssertFalse(panel.canBecomeKey)
         XCTAssertTrue(NSApp.keyWindow === keyWindow)
         presenter.show(for: second)
         presenter.dismiss(for: first)
-        XCTAssertTrue(panel.isVisible, "旧图标移出事件不能收掉新图标的提示")
+        XCTAssertTrue(UIStage.shared.isShown(panel), "旧图标移出事件不能收掉新图标的提示")
         second.text = "Updated original tooltip"
         presenter.refresh(for: second)
         let label = try XCTUnwrap(panel.contentView?.subviews.compactMap { $0 as? NSTextField }.first)
         XCTAssertEqual(label.stringValue, second.text)
         XCTAssertEqual(label.textColor, .white)
-        XCTAssertTrue(panel === window.childWindows?.first, "切换按钮应复用本窗口的同一个提示")
+        XCTAssertTrue(panel === UIStage.shared.children(of: window).first, "切换按钮应复用本窗口的同一个提示")
         XCTAssertNil(first.hitTest(.zero), "跟踪背景不能接走原按钮的鼠标点击")
         presenter.dismiss(for: second)
-        XCTAssertFalse(panel.isVisible)
+        XCTAssertFalse(UIStage.shared.isShown(panel))
     }
 
     func testWindowChangesAndRemovingTheAnchorDismissTheTip() throws {
@@ -59,14 +59,15 @@ import XCTest
         let presenter = LauncherTooltipPresenter.forWindow(window)
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
             presenter.show(for: anchor)
-            let panel = try XCTUnwrap(window.childWindows?.first)
+            let panel = try XCTUnwrap(UIStage.shared.children(of: window).first)
             NotificationCenter.default.post(name: name, object: window)
-            XCTAssertFalse(panel.isVisible, "\(name)：窗口变化后不能留下孤立提示")
+            XCTAssertFalse(UIStage.shared.isShown(panel), "\(name)：窗口变化后不能留下孤立提示")
         }
+        UIStage.show(window)   // 上面最后发的是「即将关闭」：不上屏的舞台把它当窗口关了（AppKit 里假通知分不出真关），接着用这个窗口要重新登记
         presenter.show(for: anchor)
-        let panel = try XCTUnwrap(window.childWindows?.first)
+        let panel = try XCTUnwrap(UIStage.shared.children(of: window).first)
         anchor.removeFromSuperview()
-        XCTAssertFalse(panel.isVisible)
+        XCTAssertFalse(UIStage.shared.isShown(panel))
     }
 
     func testEachWindowOwnsItsTipAndLongLabelsStayInsideTheWindow() throws {
@@ -76,13 +77,13 @@ import XCTest
         second.text = String(repeating: "Original long tooltip label ", count: 12)
         for (window, anchor) in [(firstWindow, first), (secondWindow, second)] {
             LauncherTooltipPresenter.forWindow(window).show(for: anchor)
-            let panel = try XCTUnwrap(window.childWindows?.first)
-            XCTAssertTrue(panel.isVisible)
+            let panel = try XCTUnwrap(UIStage.shared.children(of: window).first)
+            XCTAssertTrue(UIStage.shared.isShown(panel))
             XCTAssertLessThanOrEqual(panel.frame.width, 360)
             XCTAssertTrue(window.frame.insetBy(dx: 8, dy: 8).contains(panel.frame))
         }
         LauncherTooltipPresenter.forWindow(firstWindow).dismiss()
-        XCTAssertTrue(secondWindow.childWindows?.first?.isVisible == true)
+        XCTAssertTrue(UIStage.shared.children(of: secondWindow).first.map(UIStage.shared.isShown) == true)
     }
 
     private func fixture() -> (NSWindow, LauncherTooltipAnchor, LauncherTooltipAnchor) {
@@ -94,7 +95,7 @@ import XCTest
         let second = LauncherTooltipAnchor(frame: CGRect(x: 500, y: 330, width: 40, height: 40))
         second.text = "Original second tooltip"; second.placement = .below
         window.contentView?.addSubview(first); window.contentView?.addSubview(second)
-        window.orderBack(nil)
+        UIStage.show(window)
         return (window, first, second)
     }
 }

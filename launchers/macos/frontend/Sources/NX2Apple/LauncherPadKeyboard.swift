@@ -44,16 +44,16 @@ import LauncherPadBridge
         guard let owner else { return }
         let frame = owner.frame
         panel.setFrameOrigin(NSPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2))
-        owner.addChildWindow(panel, ordered: .above)
-        panel.makeKeyAndOrderFront(nil)
+        LauncherWindowPresenter.current.attach(panel, owner)
+        LauncherWindowPresenter.current.makeKeyAndOrderFront(panel)
         navigation?.focus("pad.key.q")
     }
     func close(apply: Bool) {
         guard !closed else { return }; closed = true
         if apply { applyValue(value) }
-        owner?.removeChildWindow(panel)
-        panel.delegate = nil; panel.orderOut(nil); panel.contentView = nil; panel.close()
-        owner?.makeKeyAndOrderFront(nil)
+        if let owner { LauncherWindowPresenter.current.detach(panel, owner) }
+        panel.delegate = nil; LauncherWindowPresenter.current.orderOut(panel); panel.contentView = nil; panel.close()
+        if let owner { LauncherWindowPresenter.current.makeKeyAndOrderFront(owner) }
         let navigation = navigation
         navigation?.keyboard = nil
         if let previousFocus { navigation?.focus(previousFocus) }

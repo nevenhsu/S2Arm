@@ -172,6 +172,98 @@ class SpaceMeasured(JobCase):
         # 另一个原件（非 nup）照旧单独加上
         self.assertEqual(library.pack_input_bytes(nup + [dict(size=3_000_000_000, sha256="f" * 64, format="nsp")]), 29_270_000_000)
 
+    def test_nup_dlc_adds_to_the_largest_item(self):
+        # #444：NUP 里本体 / 更新重叠取最大值，DLC 是另一棵树、不重叠，要加上（原先 DLC 也参与取最大值，整份漏算）。
+        #   手算：本体、更新各 26.27 GB，DLC 1.5 GB → 26.27 + 1.5 = 27.77 GB
+        common = dict(size=25_622_267_860, sha256="e" * 64, format="nup")
+        nup = [dict(common, type="base", contentBytes=26_270_000_000), dict(common, type="update", contentBytes=26_270_000_000),
+               dict(common, type="dlc", contentBytes=1_500_000_000)]
+        self.assertEqual(library.pack_input_bytes(nup), 27_770_000_000)
+
+    def nup_game(self):
+        # 合成 NUP（jobcase.synthetic_nup，期望就是写进去的字节）：本体 exefs main 300 B + main.npdm（256 B）、romfs a.bin 3000 B + b.bin 100 B；
+        #   更新 exefs main 500 B + main.npdm、romfs a.bin（与本体同内容 → 全量）+ c.bin 200 B；DLC romfs d1 10 B + d2 1500 B
+        from jobcase import synthetic_npdm, synthetic_nup
+        app = 0x0400486024DEC000
+        src = Path(self.root) / "drive" / "T [0400486024dec000][v131072].nup"; src.parent.mkdir(exist_ok=True)
+        a = os.urandom(3000)
+        synthetic_nup(src, app, [(0, app, 0, {"main": b"\x01" * 300, "main.npdm": synthetic_npdm(app)}, {"a.bin": a, "b.bin": b"b" * 100}, {}),
+                                 (1, app | 0x800, 131072, {"main": b"\x02" * 500, "main.npdm": synthetic_npdm(app)}, {"a.bin": a, "c.bin": b"c" * 200}, {}),
+                                 (2, app + 0x1001, 0, None, {"d1": b"d" * 10, "d2": b"e" * 1500}, {})])
+        common = dict(baseId="0400486024DEC000", path=str(src), sha256="e" * 64, size=src.stat().st_size, format="nup", guestIsa="unknown")
+        packages = [dict(common, titleId="0400486024DEC000", type="base", version=0, contentBytes=3100),
+                    dict(common, titleId="0400486024DEC800", type="update", version=131072, contentBytes=3200),
+                    dict(common, titleId="0400486024DED001", type="dlc", version=0, contentBytes=1510)]
+        return src, dict(id="0400486024DEC000", name="T", packages=packages)
+
+    def test_nup_unpack_bytes_by_cluster(self):
+        # #444：NUP 解包目录在分配单元 1024 字节的盘上的实占（每文件向上取整、每目录一簇），手算：
+        #   解包目录本身 1 簇；exefs 取更新的：main 500 → 1 簇、main.npdm 256 → 1 簇，exefs/ 1 簇 = 3 簇；romfs 全量用更新 = a 3000 + c 200 = 3200 字节：
+        #   镜像形态一个 romfs.std → 4 簇；DLC d1 10 → 1、d2 1500 → 2、romfs/ 1 = 4 簇 → 共 1 + 3 + 4 + 4 = 12 簇 = 12288
+        #   散文件形态：a 3 簇 + c 1 簇 + romfs/ 1 簇 = 5 簇 → 1 + 3 + 5 + 4 = 13 簇 = 13312；读不到簇（0）：原始字节 500 + 256 + 3200 + 10 + 1500 = 5466
+        _, game = self.nup_game()
+        c = self.context("ipa")
+        pk = library.selected_packages(game)
+        with patch.dict(os.environ, {"S2A_ROMFS_IMAGE": "1"}):
+            self.assertEqual(library.nup_unpack_bytes(c, pk, 1024), 12 * 1024)
+            self.assertEqual(library.nup_unpack_bytes(c, pk, 0), 5466)
+        with patch.dict(os.environ, {"S2A_ROMFS_IMAGE": "0"}):
+            self.assertEqual(library.nup_unpack_bytes(c, pk, 1024), 13 * 1024)
+        self.assertIsNone(library.nup_unpack_bytes(c, [dict(p, format="nsp") for p in pk], 1024))   # 不是 NUP：照原件大小算
+
+    def test_budget_counts_nup_by_cluster_on_exfat(self):
+        # #444：exFAT 1 MiB 簇的外接盘、Mac 打 iPhone 包：解包按实占（簇 1 MiB 时上一项的 12 个单位 → 1 + 3 + 1 + 3 = 8 MiB：exefs 两个文件各 1 簇 + 目录 1 簇，
+        #   romfs.std 1 簇，DLC 两个文件各 1 簇 + 目录 1 簇，解包目录 1 簇）× 1.1 = 9227468；exFAT 不能克隆再加一份；直连按原件（< 3 GB）5 GB
+        #   → 9227468 × 2 + 5e9 = 5018454936。说明写出分配单元
+        _, game = self.nup_game()
+        c = self.context("ipa")
+        with patch.dict(os.environ, {"S2A_ROMFS_IMAGE": "1"}), patch.object(library, "volume_format", return_value="exfat"), \
+                patch.object(library, "volume_cluster", return_value=1 << 20):
+            b = self.budget(c, game)
+        self.assertEqual(b["needBytes"], 9_227_468 * 2 + 5_000_000_000)
+        self.assertIn("（按这块盘 1024 KB 的分配单元逐文件算）", b["note"])
+        # 4 KB 簇（APFS 常见）：不写分配单元那句
+        with patch.dict(os.environ, {"S2A_ROMFS_IMAGE": "1"}), patch.object(library, "volume_format", return_value="apfs"), \
+                patch.object(library, "volume_cluster", return_value=4096):
+            self.assertNotIn("分配单元", self.budget(c, game)["note"])
+
+    def test_disk_full_after_enough_budget_says_estimate_low(self):
+        # #444：预检判这块盘够、出到一半写满 → 原因说清是预估偏低；预检说不够 / 盘名对不上 / 没有预检：原样
+        import errors
+        said = errors.DISK_FULL_REASON.format("Extreme SSD", "3.5", "0.9")
+        ok = dict(volumes=[dict(volume="Extreme SSD", enough=True, needBytes=19_571_257_436)])
+        self.assertEqual(errors.estimate_low(said, ok), errors.DISK_FULL_LOW.format("Extreme SSD", "3.5", "0.9", "20"))
+        self.assertEqual(errors.estimate_low(said, dict(volumes=[dict(volume="Extreme SSD", enough=False, needBytes=1)])), said)
+        self.assertEqual(errors.estimate_low(said, dict(volumes=[dict(volume="系统盘", enough=True, needBytes=1)])), said)
+        self.assertEqual(errors.estimate_low(said, None), said)
+        # 作业层收尾：Context 上有这次的预检就换句
+        c = self.context("ipa")
+        c.space_budget = ok
+        self.assertEqual(c.describe_failure(Failure(said, code="disk_full"))["summary"], errors.DISK_FULL_LOW.format("Extreme SSD", "3.5", "0.9", "20"))
+
+    def test_ns2_dump_consume_moves_dlc_instead_of_copying(self):
+        # #444：ns2_nup 的中间目录用完即删，--consume 时 DLC 散文件同盘挪进解包目录（inode 不变、来源没了），不留第二份；不带时照旧拷、来源还在
+        from jobcase import synthetic_npdm
+        spec = __import__("importlib.util").util.spec_from_file_location("ns2_dump_t", ROOT / "pack" / "ns2_dump.py")
+        dump = __import__("importlib.util").util.module_from_spec(spec); spec.loader.exec_module(dump)
+        app = 0x0400486024DEC000
+        for consume in (True, False):   # ns2_dump 当脚本跑时 pack/ 在模块路径里（收尾改名用 pack/orch/dirrename）：单测里同样放进去
+            with self.subTest(consume=consume), patch.dict(os.environ, {"S2A_ROMFS_IMAGE": "0"}), patch.object(sys, "path", [str(ROOT / "pack")] + sys.path):
+                d = Path(self.root) / f"dump{int(consume)}"
+                (d / "base/exefs").mkdir(parents=True); (d / "base/exefs/main").write_bytes(b"\x01" * 300)
+                (d / "base/exefs/main.npdm").write_bytes(synthetic_npdm(app))
+                (d / "base/romfs").mkdir(); (d / "base/romfs/a.bin").write_bytes(b"a" * 30)
+                dl = d / f"dlc/{app + 0x1001:016X}/0/romfs"; dl.mkdir(parents=True); (dl / "x.bin").write_bytes(b"x" * 40)
+                ino = os.stat(dl / "x.bin").st_ino
+                out = Path(self.root) / f"out{int(consume)}"
+                dump.convert(str(d), str(out), "T", consume=consume)
+                moved = out / "aoc/1/x.bin"
+                self.assertEqual(moved.read_bytes(), b"x" * 40)
+                self.assertEqual((dl / "x.bin").exists(), not consume)
+                if consume:
+                    self.assertEqual(os.stat(moved).st_ino, ino)
+                self.assertIn("\t1\t40\n", (out / "aoc.tsv").read_text())   # aoc.tsv 的文件数 / 字节照记（挪之前量）
+
     def test_unpacked_counts_zero_and_windows_adds_a_copy(self):
         self.assertEqual(self.need(10_000_000_000, unpacked=True, windows=False), 15_000_000_000)
         self.assertEqual(self.need(10_000_000_000, windows=True), 11_000_000_000 * 2 + 15_000_000_000)

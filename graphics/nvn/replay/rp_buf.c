@@ -33,7 +33,7 @@ struct read_range { uint64_t sub, lo, hi; };   // 页区间 [lo, hi]；同桶碰
 struct byte_range { uint64_t lo, hi; };        // 镜像内半开区间 [lo, hi)
 struct mirror_exact { uint64_t sub; unsigned n; struct byte_range ranges[EXACT_RANGES]; };
 struct mirror { nvn_gpu_buf buf; uint64_t *synced, *sub, *checked; uint64_t seen_map; uint8_t seen_ok, path; uint64_t use_sub, use_fence, prev_fence;
-                uint64_t *stale, *stale_sum; uint64_t log_cur, log_id;
+                uint64_t *stale, *stale_sum; uint64_t log_cur, log_id, alias_sub;
                 struct read_range reads[READ_BUCKETS]; struct mirror_exact *exact; };
 // 每个池最多两份镜像。平时只有第 0 份；游戏的 Finish 被放行、不等上一帧做完时（rp_exec.c nvn_be_finish_publish），每帧换一份用：
 // 上一帧的活显卡还在做，读的是另一份。两份各记各的页代号，换回来时自己把这两帧里变过的页补上。
@@ -259,16 +259,27 @@ static void pages_invalidate_locked(struct shadow *s, uint64_t off, uint64_t len
         for (uint64_t k = p; k <= q && k < s->npages; k++) m->synced[k] = 0;
     }
 }
+#include "rp_buf_alias.inc"
+
 // 回放在 CPU 上改了游戏内存 [addr, addr + n)（rp_write_note 调）：落在不受写跟踪的池里就作废镜像里的对应页。
 // 受跟踪的池靠写跟踪发现这些写，不需要；没有任何不受跟踪的池时（原子读）一步都不走。
 static void buf_invalidate_written(uint64_t addr, uint64_t n) {
-    if (!n || !__atomic_load_n(&g_untracked_shadows, __ATOMIC_ACQUIRE)) return;
+    if (!n || (!__atomic_load_n(&g_untracked_shadows, __ATOMIC_ACQUIRE) && !__atomic_load_n(&aliases_live, __ATOMIC_ACQUIRE))) return;
     const uint8_t *mem; uint64_t size;
     if (!rp_pool_find(addr, n, &mem, &size)) return;
     uint64_t k = (uint64_t)(uintptr_t)mem;
     pthread_mutex_lock(&g_bmu);
     struct shadow *s = nvn_hm_get(&g_shadow, &k);
     if (s && s->untracked) pages_invalidate_locked(s, addr - k, n, -1);
+    if (s && alias_count) {
+        for (size_t i = 0; i < alias_count; i++) {
+            const struct buf_alias *a = &aliases[i];
+            if (a->pool == k && a->phys < addr + n && addr < a->phys + (a->hi - a->lo)) {
+                for (int mi = 0; mi < 2; mi++) alias_stale(s, &s->m[mi], addr, n);
+                break;
+            }
+        }
+    }
     pthread_mutex_unlock(&g_bmu);
 }
 
@@ -353,6 +364,7 @@ uint64_t rp_buf_gpu_write_note_prefix(uint64_t addr, uint64_t len, uint64_t copy
     const uint8_t *mem; uint64_t size;
     if (merged) *merged = 0;
     if (!copy_len || copy_len > len) return 0;
+    addr = buf_address(addr, len);
     if (!rp_pool_find(addr, len, &mem, &size)) { mirror_unknown_address(); return 0; }
     if (g_gw_merge_on < 0 || !(++g_gw_merge_k & 255)) g_gw_merge_on = nvn_plat_flag("nvk_land_merge", 1) != 0;   // 开关：每 256 次登记重读一次
     const int merge_on = g_gw_merge_on;
@@ -409,6 +421,7 @@ uint64_t rp_buf_gpu_write_note2(uint64_t addr, uint64_t len, uint64_t *key, int 
 }
 uint64_t rp_buf_gpu_write_note(uint64_t addr, uint64_t len, uint64_t *pool_key) { return rp_buf_gpu_write_note2(addr, len, pool_key, NULL); }   // 不合并的老入口（单测与只登记一条的调用方）
 int rp_buf_gpu_write_pending(uint64_t addr, uint64_t len) {
+    addr = buf_address(addr, len);
     const uint8_t *mem; uint64_t size;
     if (!len || !rp_pool_find(addr, len, &mem, &size)) return -1;
     const uint64_t off = addr - (uint64_t)(uintptr_t)mem, key = (uint64_t)(uintptr_t)mem;
@@ -676,6 +689,15 @@ static int resolve_locked(uint64_t addr, uint64_t len, const uint8_t *mem, uint6
     if (!s) { g_exact_unknown = 1; return 0; }
     // 整段先选一次镜像：未落地的 GPU 写可能只覆盖其中一个摘要块。
     struct mirror *m = mirror_pick(s, addr - (uint64_t)(uintptr_t)mem, len, NULL);
+    // 虚拟地址上的 CPU 写不经过物理地址的页保护。提交内首次访问这份镜像时
+    // 将对应物理页置旧，按实际绑定范围按需同步，其余页沿用物理池的脏页日志。
+    if (alias_count && m->alias_sub != rp_sub_serial()) {
+        for (size_t i = 0; i < alias_count; i++) {
+            const struct buf_alias *a = &aliases[i];
+            if (a->pool == (uintptr_t)mem) alias_stale(s, m, a->phys, a->hi - a->lo);
+        }
+        m->alias_sub = rp_sub_serial();
+    }
     int ok = resolve_inner(addr, len, mem, size, s, m);
     if (ok) {
         const size_t ps = nvn_dirty_page_size();
@@ -693,6 +715,7 @@ int rp_test_buf_resolve_block(void) __attribute__((weak));
 
 int rp_buf_resolve(nvn_gpu_cmd c, uint64_t addr, uint64_t len, nvn_gpu_buf *buf, uint64_t *off) {
     if (rp_test_buf_resolve_block && rp_test_buf_resolve_block()) { mirror_unknown_address(); return 0; }
+    addr = buf_address(addr, len);
     (void)c;
     const uint8_t *mem; uint64_t size;
     if (!len || !rp_pool_find(addr, len, &mem, &size)) {
@@ -714,7 +737,9 @@ int rp_buf_resolve(nvn_gpu_cmd c, uint64_t addr, uint64_t len, nvn_gpu_buf *buf,
     return r;
 }
 // 批量：一次抢锁解析多段（顶点流 / 存储缓冲），成功写 1、失败写 0。
-static void resolve_multi_chunk(int n, const uint64_t *addr, const uint64_t *len, nvn_gpu_buf *buf, uint64_t *off, unsigned char *ok) {
+static void resolve_multi_chunk(int n, const uint64_t *guest, const uint64_t *len, nvn_gpu_buf *buf, uint64_t *off, unsigned char *ok) {
+    uint64_t addr[16];
+    for (int i = 0; i < n; i++) addr[i] = buf_address(guest[i], len[i]);
     const uint8_t *mem[16]; uint64_t size[16];
     for (int i = 0; i < n; i++) { mem[i] = NULL; size[i] = 0; ok[i] = 0; if (len[i]) rp_pool_find(addr[i], len[i], &mem[i], &size[i]); }
     const uint64_t w0 = (g_res_tm && n) ? res_now() : 0;
@@ -745,6 +770,11 @@ void rp_buf_pool_gone(const void *mem) {
     uint64_t k = (uint64_t)(uintptr_t)mem;
     char said[192]; said[0] = 0;
     pthread_mutex_lock(&g_bmu);
+    size_t kept = 0;
+    for (size_t i = 0; i < alias_count; i++)
+        if (aliases[i].pool != k) aliases[kept++] = aliases[i];
+    alias_count = kept;
+    __atomic_store_n(&aliases_live, kept != 0, __ATOMIC_RELEASE);
     struct shadow *s = nvn_hm_del(&g_shadow, &k);
 #ifdef S2A_GPU_LAND_TEST
     extern void rp_test_pool_gone(void);
@@ -815,6 +845,8 @@ void rp_buf_reset(void) {
     free(g_limbo); g_limbo = NULL; g_nlimbo = g_climbo = 0; g_hold = 0; g_exact_on = 0;
     if (g_null_storage) nvn_gpu_buf_release(g_null_storage, NULL, NULL);
     g_null_storage = NULL;
+    free(aliases); aliases = NULL; alias_count = alias_cap = 0;
+    __atomic_store_n(&aliases_live, 0, __ATOMIC_RELEASE);
     free(g_shadow.keys); free(g_shadow.vals); nvn_hm_init(&g_shadow, 8); g_mirror_cur = 0;
     g_land_noresync = -1;
     pthread_mutex_unlock(&g_bmu);
@@ -833,6 +865,7 @@ static struct wl_ent { uint64_t seq, a, b; } g_wl[WL_N];
 static uint64_t g_wl_seq, g_wl_put;
 uint64_t rp_write_mark(void) { return g_wl_seq; }
 void rp_write_note(uint64_t a, uint64_t n) {
+    a = buf_address(a, n);
     g_wl[g_wl_put].seq = ++g_wl_seq; g_wl[g_wl_put].a = a; g_wl[g_wl_put].b = a + n; g_wl_put = (g_wl_put + 1) % WL_N;
     buf_invalidate_written(a, n);   // 不受写跟踪的池靠这条知道「回放自己改了哪几页」（受跟踪的池由写跟踪看到）
 }
@@ -843,6 +876,7 @@ int rp_write_touched(uint64_t mark, uint64_t a, uint64_t n) {
     const uint64_t seq = __atomic_load_n(&g_wl_seq, __ATOMIC_RELAXED);
     if (mark == seq) return 0;
     if (seq - mark > WL_N) return 1;
+    a = buf_address(a, n);
     const uint64_t b = a + n;
     for (uint64_t s = mark + 1; s <= seq; s++) {   // 第 s 次写入放在下标 (s-1)%WL_N（rp_write_note 的写法）
         const struct wl_ent *w = &g_wl[(s - 1) % WL_N];
@@ -853,6 +887,7 @@ int rp_write_touched(uint64_t mark, uint64_t a, uint64_t n) {
 // [addr, addr+len) 与还没落地的 GPU 写相交吗（登记着的、正在锁外拷回的；表满说不清的按相交算）。线程：[提交]
 int rp_buf_gpu_pending(uint64_t addr, uint64_t len) {
     if (!len || !__atomic_load_n(&g_gw_live, __ATOMIC_ACQUIRE)) return 0;
+    addr = buf_address(addr, len);
     const uint8_t *mem; uint64_t size;
     if (!rp_pool_find(addr, len, &mem, &size)) return 0;
     uint64_t k = (uint64_t)(uintptr_t)mem, a = addr - k, b = a + len; int hit = 0;
@@ -888,6 +923,7 @@ int rp_op_update_ub_gpu(nvn_gpu_cmd c, const void *a, const void *rec) {
 int rp_op_copy_b2b_gpu(nvn_gpu_cmd c, const void *a, const void *rec) {
     uint64_t s, d, n; memcpy(&s, a, 8); memcpy(&d, (const uint8_t *)a + 8, 8); memcpy(&n, (const uint8_t *)a + 16, 8);
     if (!c || !n || !in_pool(s, n) || !in_pool(d, n) || (!rp_buf_gpu_pending(s, n) && !rp_buf_gpu_pending(d, n))) return 0;
+    s = buf_address(s, n); d = buf_address(d, n);
     if (s < d + n && d < s + n) { nvn_unimpl("buf", "copy_overlap_gpu_pending", rec); return 0; }   // 源目标重叠（GPU 拷贝不许）：照旧 CPU 做，记账
     rp_pass_flush(c);
     nvn_gpu_buf sb, db; uint64_t so, doff;
@@ -924,23 +960,67 @@ void rp_op_clear_buf(const p_clear_buf *cb, const void *rec) {   // 32 位样式
     if (i < n) memcpy(p + i, &cb->value, (size_t)(n - i));
 }
 
-// OP_COPY_B2T：缓冲里是线性行（行距 / 片距可由游戏设），直接从游戏内存按当前段的 GPU 顺序传进贴图（nvn_mtl.m copy_b2t @13762）。
-// 线性 / 线性渲染目标贴图走同一条路：宿主贴图不按游戏的内存布局建，拷贝只看区域、行距、片距（iOS copy_b2t 同样不分）
+// 缓冲到贴图：未落地的 GPU 写在池镜像中，纯 CPU 源仍走上传入口（含格式转换）。
 void rp_op_copy_b2t(nvn_gpu_cmd c, const p_copy_b2t *o, const void *rec) {
-    const tex_t *t = o->tex; if (!t) return;
-    int bw = 1, bh = 1, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-    if (!bpb || o->r.width <= 0 || o->r.height <= 0) { nvn_unimpl("tex", "b2t_bad_format_or_region", rec); return; }
-    uint32_t level = o->has_view && o->view.set_levels ? o->view.base_level : 0, layer0 = o->has_view && o->view.set_layers ? o->view.min_layer : 0;
-    uint64_t row = o->row_stride ? o->row_stride : (uint64_t)(((uint32_t)o->r.width + (uint32_t)bw - 1) / (uint32_t)bw) * (uint64_t)bpb;
-    uint64_t rows = ((uint32_t)o->r.height + (uint32_t)bh - 1) / (uint32_t)bh, img = o->image_stride ? o->image_stride : row * rows;
-    uint32_t nz = o->r.depth > 0 ? (uint32_t)o->r.depth : 1;
-    if (!in_pool(o->src, img * nz)) { nvn_unimpl("buf", "b2t_source_outside_pools", rec); return; }
+    const tex_t *t = o->tex;
+    if (!t || !c) return;
+    nvn_fmt_info fi;
+    if (!nvn_fmt_info_of(t->d.format, &fi) || o->r.width <= 0 || o->r.height <= 0 || o->r.depth < 0) {
+        nvn_unimpl("tex", "b2t_bad_format_or_region", rec); return;
+    }
+    uint32_t level = o->has_view && o->view.set_levels ? o->view.base_level : 0;
+    int is3d = t->d.target == NVN_TEXTURE_TARGET_3D;
+    uint32_t layer0 = !is3d && o->has_view && o->view.set_layers ? o->view.min_layer : 0;
+    uint32_t nz = o->r.depth ? (uint32_t)o->r.depth : 1;
+    if (level >= (t->d.levels ? t->d.levels : 1u) || level >= 32) {
+        nvn_unimpl("tex", "b2t_bounds", rec); return;
+    }
+    uint32_t w = t->d.width >> level, h = t->d.height >> level;
+    if (!w) w = 1;
+    if (!h || rp_fold_1d_target(t->d.target) != t->d.target) h = 1;
+    uint32_t layers = is3d ? t->d.depth >> level : rp_tex_layer_count(t);
+    if (is3d && !layers) layers = 1;
+    uint64_t end_x = (uint64_t)(uint32_t)o->r.xoffset + (uint32_t)o->r.width;
+    uint64_t end_y = (uint64_t)(uint32_t)o->r.yoffset + (uint32_t)o->r.height;
+    if (o->r.xoffset < 0 || o->r.yoffset < 0 || o->r.zoffset < 0 ||
+        end_x > w || end_y > h || (uint64_t)layer0 + (uint32_t)o->r.zoffset + nz > layers ||
+        o->r.xoffset % fi.bw || o->r.yoffset % fi.bh ||
+        (o->r.width % fi.bw && end_x != w) || (o->r.height % fi.bh && end_y != h)) {
+        nvn_unimpl("tex", "b2t_bounds", rec); return;
+    }
+    uint64_t bytes = (((uint64_t)o->r.width + fi.bw - 1) / fi.bw) * fi.bytes;
+    uint64_t rows = ((uint64_t)o->r.height + fi.bh - 1) / fi.bh;
+    uint64_t row = o->row_stride ? o->row_stride : bytes;
+    if (row < bytes || (!fi.expand && row % fi.bytes) ||
+        row / fi.bytes > UINT32_MAX / fi.bw || row > UINT64_MAX / rows) {
+        nvn_unimpl("tex", "b2t_bad_stride", rec); return;
+    }
+    uint64_t img = o->image_stride ? o->image_stride : row * rows;
+    if (img < row * rows || img / row > UINT32_MAX / fi.bh || img > (UINT64_MAX - o->src) / nz) {
+        nvn_unimpl("tex", "b2t_bad_stride", rec); return;
+    }
+    uint64_t total = img * nz;
+    if (!in_pool(o->src, total)) { nvn_unimpl("buf", "b2t_source_outside_pools", rec); return; }
+    nvn_gpu_buf source = NULL;
+    uint64_t off = 0;
+    if (rp_buf_gpu_pending(o->src, total)) {
+        // 上传入口要在 CPU 上展开 / 转深度或拆深度模板面，不能拿旧客体字节做转换。
+        if (fi.expand || (fi.depth && fi.stencil) || (rp_fmt_caps(t->d.format) & NVN_GPU_FMT_SUBST)) {
+            nvn_unimpl("tex", "b2t_gpu_source_requires_conversion", rec); return;
+        }
+        if (!rp_buf_resolve(c, o->src, total, &source, &off)) {
+            nvn_unimpl("buf", "b2t_pending_source_unavailable", rec); return;
+        }
+        if ((off & 3) || off % fi.bytes || (nz > 1 && ((img & 3) || img % fi.bytes))) {
+            nvn_unimpl("tex", "b2t_gpu_source_alignment", rec); return;
+        }
+    }
     nvn_gpu_tex g = rp_tex_resolve_plain(t, c);
-    if (!g || !c) return;
+    if (!g) return;
     if (t->d.target == NVN_TEXTURE_TARGET_3D && nvn_plat_flag("nvk_drawlog", 0)) {   // 调试开关下：三维贴图的每次上传打一行
         char b[200]; snprintf(b, sizeof b, "三维贴图上传 #%llu 格式 %#x 尺寸 %dx%dx%d 级 %u：区域 %d,%d,%d %dx%dx%d 行距 %llu 片距 %llu（记录里 行 %llu 片 %llu）块 %dx%d 每块 %d 字节",
                              (unsigned long long)t->serial, (unsigned)t->d.format, t->d.width, t->d.height, t->d.depth, level, o->r.xoffset, o->r.yoffset, o->r.zoffset, o->r.width, o->r.height, o->r.depth,
-                             (unsigned long long)row, (unsigned long long)img, (unsigned long long)o->row_stride, (unsigned long long)o->image_stride, bw, bh, bpb);
+                             (unsigned long long)row, (unsigned long long)img, (unsigned long long)o->row_stride, (unsigned long long)o->image_stride, fi.bw, fi.bh, fi.bytes);
         nvn_plat_log(NVN_PLAT_LOG_INFO, "tex", b);
     }
     for (uint32_t z = 0; z < nz; z++) {
@@ -948,7 +1028,8 @@ void rp_op_copy_b2t(nvn_gpu_cmd c, const p_copy_b2t *o, const void *rec) {
         // 第几层 / 第几片都经 layer 交给后端（三维贴图的 layer 就是深度方向的片号；视图的起始层只对分层贴图有意义）
         uint32_t layer = (uint32_t)o->r.zoffset + z + (t->d.target == NVN_TEXTURE_TARGET_3D ? 0 : layer0);
         r.zoffset = 0;
-        nvn_gpu_tex_upload(c, g, level, layer, &r, (const void *)(uintptr_t)(o->src + z * img), row, img);
+        if (source) nvn_gpu_copy_buf_tex(c, source, off + z * img, row, img, g, level, layer, &r);
+        else nvn_gpu_tex_upload(c, g, level, layer, &r, (const void *)(uintptr_t)(o->src + z * img), row, img);
     }
     rp_tex_mark_gpu_written(t);   // 这张贴图的内容从此不再从它自己的存储重传
 }

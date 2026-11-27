@@ -21,7 +21,7 @@ import NXModel
             .padding(32).frame(width: width, height: 140).foregroundStyle(.white).background(Color.black)
             .environmentObject(Localizer(.en)).environment(\.padControls, navigation).preferredColorScheme(.dark))
             let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: width, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             defer { window.close() }
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(100))
@@ -84,7 +84,7 @@ import NXModel
             selectable: selectable, button: button, subtitleButton: subtitleButton, baselines: baselines).environment(\.padControls, navigation))
         let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: width, height: 110),
                               styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         defer { window.close() }
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(90))

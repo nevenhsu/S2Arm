@@ -3084,8 +3084,8 @@
   "en": "S2Arm will attempt a generic build. Preparation does not certify game compatibility."
  },
  {
-  "source": "找不到 Python，请在设置中指定 Python 3.11 或更新版本。",
-  "en": "Python was not found. Select Python 3.11 or later in Settings."
+  "source": "找不到 Python，请在设置中指定 Python 3.12 或更新版本。",
+  "en": "Python was not found. Select Python 3.12 or later in Settings."
  },
  {
   "source": "请选择包含 pack/jobs 的 S2Arm 源码目录。",
@@ -3108,8 +3108,8 @@
   "en": "Requires Apple Silicon, macOS 15 or later, full Xcode, Metal compiler components, Python and the .NET 10 SDK."
  },
  {
-  "source": "选择 S2Arm 源码、完整 Xcode 和 Python 3.11+，安装 .NET 10 SDK。Python 需要 capstone、lz4、numpy；着色器工具需要 zstd、SPIRV-Tools 和 Metal 编译组件。共享字体由玩家提供，设置为包含 .bfttf 的目录。点击准备引擎工具编译 NSP/XCI 读取器，再重新检查。原始游戏、更新、DLC 和 prod.keys 均由玩家自行导入。",
-  "en": "Select the S2Arm checkout, full Xcode and Python 3.11+, and install the .NET 10 SDK. Python needs capstone, lz4 and numpy; shader tools need zstd, SPIRV-Tools and Metal compiler components. Select a folder containing your own .bfttf shared fonts. Prepare the engine tools to compile the NSP/XCI reader, then recheck. Supply your own games, updates, DLC and prod.keys."
+  "source": "选择 S2Arm 源码、完整 Xcode 和 Python 3.12+，安装 .NET 10 SDK。Python 需要 capstone、lz4、numpy；着色器工具需要 zstd、SPIRV-Tools 和 Metal 编译组件。共享字体由玩家提供，设置为包含 .bfttf 的目录。点击准备引擎工具编译 NSP/XCI 读取器，再重新检查。原始游戏、更新、DLC 和 prod.keys 均由玩家自行导入。",
+  "en": "Select the S2Arm checkout, full Xcode and Python 3.12+, and install the .NET 10 SDK. Python needs capstone, lz4 and numpy; shader tools need zstd, SPIRV-Tools and Metal compiler components. Select a folder containing your own .bfttf shared fonts. Prepare the engine tools to compile the NSP/XCI reader, then recheck. Supply your own games, updates, DLC and prod.keys."
  },
  {
   "source": "界面与部分任务管理代码移植自 LumaDock，采用 MIT License，保留原版权声明。S2Arm 使用 Ryujinx、LibHac、SPIRV-Cross 等组件，各自许可证保持有效。详见应用内 README.md 中的版权声明及各组件的第三方许可文件。项目不附带游戏、密钥、固件或存档，与 Nintendo 无隶属关系。",
@@ -3152,8 +3152,8 @@
   "en": "In Camera mode, click the game view to capture mouse look. While captured, Esc only releases the mouse and does not send its mapped game button. Press Esc again after release to use that binding. Losing focus releases the mouse and clears input. In full screen, Esc leaves full screen; if Esc is mapped to a game button, a short press still goes to the game and holding it for 1 second leaves full screen. ⌃⌘F and View → Exit Full Screen also work."
  },
  {
-  "source": "S2Arm 引擎、Mac 宿主和 NSP/XCI 读取器随应用内置。游戏准备仍需要完整 Xcode、Metal 编译组件、Python 3.11+ 和 .NET 10 SDK。Python 需要 capstone、lz4、numpy；着色器工具需要 zstd、SPIRV-Tools，timeout 随应用提供。共享字体由玩家提供，设置为包含 .bfttf 的目录后重新检查。原始游戏、更新、DLC 和 prod.keys 均由玩家自行导入。",
-  "en": "S2Arm, the Mac host and NSP/XCI reader are included. Preparing games still requires full Xcode, Metal compiler components, Python 3.11+ and the .NET 10 SDK. Python needs capstone, lz4 and numpy; shader tools need zstd and SPIRV-Tools, and timeout is included with the app. Select a player-provided folder of .bfttf shared fonts, then recheck. Import your own original games, updates, DLC and prod.keys."
+  "source": "S2Arm 引擎、Mac 宿主和 NSP/XCI 读取器随应用内置。游戏准备仍需要完整 Xcode、Metal 编译组件、Python 3.12+ 和 .NET 10 SDK。Python 需要 capstone、lz4、numpy；着色器工具需要 zstd、SPIRV-Tools，timeout 随应用提供。共享字体由玩家提供，设置为包含 .bfttf 的目录后重新检查。原始游戏、更新、DLC 和 prod.keys 均由玩家自行导入。",
+  "en": "S2Arm, the Mac host and NSP/XCI reader are included. Preparing games still requires full Xcode, Metal compiler components, Python 3.12+ and the .NET 10 SDK. Python needs capstone, lz4 and numpy; shader tools need zstd and SPIRV-Tools, and timeout is included with the app. Select a player-provided folder of .bfttf shared fonts, then recheck. Import your own original games, updates, DLC and prod.keys."
  },
  {
   "source": "初始化内置 S2Arm 引擎",
@@ -3316,8 +3316,8 @@
   "en": "Choose your own .bfttf shared-font folder."
  },
  {
-  "source": "需要 Python 3.11 或更新版本。",
-  "en": "Requires Python 3.11 or later."
+  "source": "需要 Python 3.12 或更新版本。",
+  "en": "Requires Python 3.12 or later."
  },
  {
   "source": "应用内置 S2Arm 宿主和准备工具。",
@@ -9492,6 +9492,10 @@
   "en": "Unpack {0}"
  },
  {
+  "source": "解包 {0}（按这块盘 {1} KB 的分配单元逐文件算）",
+  "en": "Unpack {0} (counted file by file at this drive's {1} KB allocation unit)"
+ },
+ {
   "source": "已在盘上",
   "en": "already on disk"
  },
@@ -10582,6 +10586,10 @@
  {
   "source": "在「{0}」上腾出至少 {3} GB 后重试；游戏原件、存档和上次成功的运行版本别删。",
   "en": "Free up at least {3} GB on “{0}”, then try again. Don't delete the game files, saves, or the last version that ran successfully."
+ },
+ {
+  "source": "「{0}」空间不够：这一步还要约 {1} GB，盘上只剩 {2} GB。出包前估这块盘要 {3} GB、判的是够用：这次是 S2Arm 预估偏低，不是这块盘本来就不够。",
+  "en": "Not enough space on “{0}”: this step needs about {1} GB, but only {2} GB is free. Before building, S2Arm estimated this drive needed {3} GB and judged it enough: this time S2Arm's estimate was too low — your drive wasn't too small to begin with."
  },
  {
   "source": "已送到手机，但手机上的 S2Arm 还没有签名证书，这款还开不了：在手机上打开 S2Arm → 齿轮 →「签名证书」，SideStore 装的点「从 SideStore 获取」；AltStore 装的先在 AltStore 设置里导出签名证书，再点「导入 .p12…」。",

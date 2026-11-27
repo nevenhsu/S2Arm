@@ -112,7 +112,7 @@ import XCTest
                 }
             }.padding(20).environment(\.padControls, navigation))
             let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 640, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             navigation.source.controllers = { [controller] }; navigation.attach(window); navigation.source.stop()
             navigation.source.isActive = { true }; navigation.source.faceMapping = { _ in mapping }
             defer { navigation.detach(); window.close() }
@@ -204,7 +204,7 @@ import XCTest
         let host = NSHostingView(rootView: ControllerFaceMappingEditor(store: store, family: .nintendo, lang: "zh")
             .padding(20).frame(width: 380).launcherDropdownHost().environment(\.padControls, navigation))
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
         navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
         defer { navigation.detach(); window.close() }
         try await Task.sleep(for: .milliseconds(100))
@@ -238,7 +238,7 @@ import XCTest
                 .padding(20).frame(width: 380).background(Color(white: 0.12)).preferredColorScheme(.dark)
                 .launcherDropdownHost().environment(\.padControls, navigation))
             let window = NSWindow(contentRect: CGRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            window.isReleasedWhenClosed = false; window.contentView = host; UIStage.show(window)
             navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
             defer { navigation.detach(); window.close() }
             try await Task.sleep(for: .milliseconds(100))

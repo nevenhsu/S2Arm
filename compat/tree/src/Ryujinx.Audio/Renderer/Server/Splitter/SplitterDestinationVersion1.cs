@@ -141,7 +141,7 @@ namespace Ryujinx.Audio.Renderer.Server.Splitter
         //   游戏每更新都写的(DestinationId/音量/IsUsed)整拷;游戏只在 ResetPrevVolume
         //   路径写的(_previousMix、NeedToUpdateInternalState 清位)按「影子相对锁1 基底(sourceBase)的增量」落——
         //   没写过就保留 live,中拍的标记/内态刷新不抹;拍写的(_isPreviousBiquadFilterEnabled)
-        //   不拷。链表指针 _next 不拷,由链头重建(SplitterContext.S2ACommitFrom)
+        //   不拷。链表指针 _next 不在这里拷,由 S2ACommitLinkFrom 按下标原样平移
         internal void S2ACommitGameFieldsFrom(in SplitterDestinationVersion1 source, in SplitterDestinationVersion1 sourceBase)
         {
             DestinationId = source.DestinationId;
@@ -221,6 +221,13 @@ namespace Ryujinx.Audio.Renderer.Server.Splitter
         /// <summary>
         /// Remove the link to the next element.
         /// </summary>
+
+        // S2Arm (#12/#13 拆分): 落账时链指针照影子原样——取影子同下标目的地的 _next,从影子数组平移回 live 数组
+        internal unsafe void S2ACommitLinkFrom(in SplitterDestinationVersion1 source, SplitterDestinationVersion1* shadowBase, SplitterDestinationVersion1* liveBase)
+        {
+            _next = source._next;
+            S2ARebindSnapshotPointers(shadowBase, liveBase);
+        }
 
         // S2Arm (#12/#13 拆分 · 渲染拍不等 Update 的锁): 锁1 快照拷贝的重绑(理由见 SplitterState.S2ARebindSnapshotPointers:
         //   拷来的 _next 指着 live,影子段 ClearLinks 顺着写会指进 live;按下标平移重绑到影子数组)

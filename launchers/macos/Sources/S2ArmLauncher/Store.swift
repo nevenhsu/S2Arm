@@ -347,7 +347,7 @@ final class WorkerOutput: @unchecked Sendable {
         let candidates = [resources.appendingPathComponent("Runtime/python/bin/python3").path,
                           "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"].compactMap{$0}
         if let path=candidates.first(where:{FileManager.default.isExecutableFile(atPath:$0)}) { return URL(fileURLWithPath:path) }
-        throw NSError(domain:"S2Arm",code:1,userInfo:[NSLocalizedDescriptionKey:L("找不到 Python，请在设置中指定 Python 3.11 或更新版本。")])
+        throw NSError(domain:"S2Arm",code:1,userInfo:[NSLocalizedDescriptionKey:L("找不到 Python，请在设置中指定 Python 3.12 或更新版本。")])
     }
     func jobEngineURL() throws -> URL {
         let bundled=resources.appendingPathComponent("Jobs/main.py")
@@ -358,7 +358,7 @@ final class WorkerOutput: @unchecked Sendable {
     }
     func failEnvironmentBootstrap(_ detail:String) {
         checkingEnvironment = false; environmentReportComplete = false; environmentCallbacks = []
-        checks = [.init(name:"Python",ok:false,message:"Python 无法启动环境检查",help:"请安装 Python 3.11 或更新版本，并在设置中指定可执行文件。",action:"reinstall",group:"bundled",requiredFor:["prepare","launch"],detail:detail)]
+        checks = [.init(name:"Python",ok:false,message:"Python 无法启动环境检查",help:"请安装 Python 3.12 或更新版本，并在设置中指定可执行文件。",action:"reinstall",group:"bundled",requiredFor:["prepare","launch"],detail:detail)]
     }
     private func watchEnvironmentWorker(_ id:String) {
         DispatchQueue.main.asyncAfter(deadline:.now()+45) { [weak self] in

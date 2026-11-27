@@ -284,7 +284,7 @@ struct SaveManageSheet: View {
         stamp.dateFormat = "yyyyMMdd-HHmm"
         let safe = gameName.components(separatedBy: CharacterSet(charactersIn: "/:\\")).joined(separator: " ")
         panel.nameFieldStringValue = "\(safe) \(stamp.string(from: Date())).s2asave"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         let done = t("save.backupDone")
         state.run(.backup, failed: reason) { [model, gameID, state] events in
             let path = try await model.saveBackup(gameID, to: url, events: events)
@@ -299,7 +299,7 @@ struct SaveManageSheet: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, let url = panel.url else { return }
         inspect(url)
     }
 

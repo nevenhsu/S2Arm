@@ -26,8 +26,12 @@ elif [ ! "${PY+x}" ]; then
     PY="$HOME/.s2arm/venv/bin/python3"
 fi
 export PY S2A_PY="$PY"
+# 环境下限（bash 5 / Python = PYTHON_MINIMUM，tools/env_floor.sh）：错环境跑出的红是假红，不够就不跑
+source "$repo_dir/tools/env_floor.sh"; s2a_env_floor "$repo_dir" "$PY" || exit 2
 # The platform gate installs this helper; direct test.sh keeps original streams.
 source "$android_dir/tools/gate_step.sh"
+# 子项键（GATE_ONLY=<键…> 只跑这些键的步；门禁里每步都要在表里登记，见 android/tools/gate_keys.tsv）
+s2a_gate_keys_init "$android_dir/tools/gate_keys.tsv" || exit 1
 # Audio focus policy: lifecycle, denial and late callbacks without Android hardware.
 s2a_gate_step mkdir -p "$out/java"
 s2a_gate_step javac -encoding UTF-8 -d "$out/java" \
@@ -644,4 +648,9 @@ s2a_gate_step "$PY" "$android_dir/cs/test_nuget_verify.py"
 s2a_gate_step "$PY" "$android_dir/cs/test_static_cache.py"
 # doctor 源码布局与缓存契约（版本表、NDK 宿主目录、codec recipe-key 缓存）。
 s2a_gate_step "$PY" -B "$android_dir/doctor/test_doctor.py"
-
+# 门禁子项键：每步恰好一个键、bash / python 归键一致、挑键宁多勿漏、GATE_ONLY 只跑名单里的键（android/tools/gate_keys.*）
+s2a_gate_step "$PY" "$android_dir/tests/gate_keys_test.py"
+if [ -n "${S2A_GK_ON:-}" ]; then
+    echo "安卓门禁子项键 ${GATE_ONLY:-全部}：跑 ${S2A_GK_RUN} 步、跳过 ${S2A_GK_SKIP} 步"
+    [ "$S2A_GK_RUN" -gt 0 ] || { s2a_gate_note "【红】安卓门禁子项键 ${GATE_ONLY:-全部} 一步都没跑（键表与 test.sh 对不上）"; exit 1; }
+fi

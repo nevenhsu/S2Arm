@@ -29,6 +29,10 @@
 #   本机那份与 gate-host 那份（GATE_PLAN）各用各机器上的缓存。GATE_TEST_CACHE=0 关；算键失败 / 读不到一律当没命中照跑（宁可多跑）
 set -u
 R=$(git rev-parse --show-toplevel) || exit 1; cd "$R"
+# 环境下限（bash 5 / Python = PYTHON_MINIMUM，tools/env_floor.sh）：错环境跑出的红是假红，不够就不跑
+#   按本脚本所在仓库找；单测把 gate.sh 单独拷进假仓库跑（没有 env_floor.sh）时不核——外层门禁已核过同一环境；真仓库里一定在（tests/env_floor_test.sh 核）
+_ef=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if [ -f "$_ef/tools/env_floor.sh" ]; then . "$_ef/tools/env_floor.sh"; s2a_env_floor "$_ef" python3 ${S2A_PY:+"$S2A_PY"} || exit 2; fi; unset _ef
 # 私有工具自找放最前（11-24：原先在后面「门禁机配置自找」里才从 machine.local 补 S2A_PRIVATE_TOOLS，而拼「门禁显卡：独占 / 共享」
 #   单测命令时就要用它决定套不套显卡锁——各线自检派 gate-host 不带这个变量，present_settings_test 一律裸跑、不拿锁，和开窗口的组同时跑挂起在第 0 帧）
 MCK=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null); MCK=${MCK%/.git}

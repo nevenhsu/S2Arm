@@ -19,7 +19,7 @@ G=${1:?款}; H=$(cd "$(dirname "$0")" && pwd); R=$(cd "$H/.." && pwd); source "$
 # 扫描器与本阶段各 Python 工具的解释器钉死一个（tools/rewriter-requirements.txt：capstone / lz4 版本固定，宽屏扫描器用；10-22 gate-host 的 /usr/bin/python3 没有 capstone，门禁改写全失败）
 #   顺序：S2A_PYTHON → S2A_PY → tools/machine.local 的 S2A_PY（开发机在那里声明钉版 venv）→ PATH 上的 python3（10-23 维护者：不许写死私人路径；11-07 代码里不再探开发机 venv）
 PY=${S2A_PYTHON:-${S2A_PY:-$(bash "$R/tools/machine.sh" get S2A_PY 2> /dev/null)}}; PY=${PY:-$(command -v python3)}
-[ -n "$PY" ] && [ -x "$PY" ] || { echo "【红】$G 改写器找不到 Python 解释器：装 Python 3.11+ 后按 tools/rewriter-requirements.txt 装依赖，或用 S2A_PYTHON=<解释器> 指定"; exit 1; }
+[ -n "$PY" ] && [ -x "$PY" ] || { echo "【红】$G 改写器找不到 Python 解释器：装 Python $(sed -n 's/^PYTHON_MINIMUM = (\([0-9]*\), \([0-9]*\)).*/\1.\2/p' "$R/pack/jobs/toolchain.py")+ 后按 tools/rewriter-requirements.txt 装依赖，或用 S2A_PYTHON=<解释器> 指定"; exit 1; }
 CUR=$(root_cur "$G"); [ -n "$CUR" ] || { echo "【红】$G 没有现行产物根（先 pack/seed_root.sh）"; exit 1; }
 [ -f "$CUR/exefs/main" ] || { echo "【红】$CUR 里没有 exefs/main"; exit 1; }
 # 真实输入记录（tools/stage_deps.py，10-30 根修：键原先手工列生成器，fps_warehouse / profile_guess 等漏进键，热出包跳过改写用旧产物）：

@@ -21,7 +21,7 @@ if [ -n "${S2A_ANDROID_VK_REMOTE:-}" ] && [ -z "${S2A_REMOTE_NAME:-}" ] && [ -f 
       #   （11-14 留下的一把空锁三天没人删，此后每次都等满 30 分钟退 75）：等锁时持有者 pid 已不在、或没记持有者且锁比最长持有（2700 秒）还旧，就收回
       if [ -n "$L" ]; then for _ in $(seq 360); do
           if mkdir "$L" 2> /dev/null; then held=1; echo "$$ $(date +%T) $PWD" > "$L/owner"; break; fi
-          o=$(awk "{print \$1; exit}" "$L/owner" 2> /dev/null); age=$(( $(date +%s) - $(stat -f %m "$L" 2> /dev/null || stat -c %Y "$L" 2> /dev/null || date +%s) ))
+          o=$(awk "{print \$1; exit}" "$L/owner" 2> /dev/null); age=$(( $(date +%s) - $(stat -c %Y "$L" 2> /dev/null || stat -f %m "$L" 2> /dev/null || date +%s) ))
           if { [ -n "$o" ] && ! kill -0 "$o" 2> /dev/null; } || { [ -z "$o" ] && [ "$age" -gt 2760 ]; }; then
             echo "收回陈旧的安卓 Vulkan 用例锁 ${L}（持有 pid ${o:-未记}，已 ${age} 秒）"; rm -f "$L/owner"; rmdir "$L" 2> /dev/null; continue; fi
           sleep 5; done; [ -n "$held" ] || { echo "等不到安卓 Vulkan 用例锁 ${L}（30 分钟）"; exit 75; }; fi

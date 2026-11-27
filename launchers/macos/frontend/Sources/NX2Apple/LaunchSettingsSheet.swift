@@ -444,7 +444,7 @@ struct LaunchSettingsSheet: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
         panel.allowedContentTypes = [.zip, .folder]
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, !panel.urls.isEmpty else { return }
         let paths = panel.urls.map(\.path)
         submit { await load(nil, modsImport: paths) }
     }
@@ -463,7 +463,7 @@ struct LaunchSettingsSheet: View {
         let stack = NSStackView(views: [box, note]); stack.orientation = .vertical; stack.alignment = .leading; stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
         stack.widthAnchor.constraint(equalToConstant: 460).isActive = true
         panel.accessoryView = stack; panel.isAccessoryViewDisclosed = true
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        guard LauncherWindowPresenter.current.runPanel(panel) == .OK, !panel.urls.isEmpty else { return }
         let paths = panel.urls.map(\.path), share = box.state == .on
         UserDefaults.standard.set(share, forKey: "S2ACheatsShare")
         submit { await load(nil, cheatsImport: paths, cheatsShare: share) }

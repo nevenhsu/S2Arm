@@ -36,13 +36,13 @@ o=$(r hooks compat/tree/src/Ryujinx.Graphics.Vulkan/Effects/Textures/SmaaAreaTex
 o=$(r hooks compat/tree/src/Ryujinx.HLE/HOS/Services/Hid/IHidServer.cs); ck "改 Ryujinx 服务代码 → 不跑原生钩子、跑服务钩子（实得：${o}）" '[[ "$o" != *runtime/gate.sh* ]] && [[ "$o" == *services/gate.sh* ]]'
 o=$(r hooks android/app/A.java); ck "改安卓外壳 → 安卓无设备测钩子 android/gate.sh（11-20 接回）+ 安卓新图形层钩子（实得：${o}）" '[ "$(echo $o)" = "android/gate.sh android/native/gfx_plat/gate.sh" ]'
 o=$(r hooks runtime/src/svc_mem.c .github/workflows/windows-cleanup.yml); ck "改 runtime/src + 表外路径 → 全跑含两个安卓钩子（android/gate.sh 11-20 接回）、不含已删的 core-link / ctest-link 旧钩子（实得：${o}）" '[[ "$o" == *runtime/gate.sh* ]] && [[ "$o" == *android/native/gfx_plat/gate.sh* ]] && [[ " $(echo $o) " == *" android/gate.sh "* ]] && [[ "$o" != *android/core-link/* ]] && [[ "$o" != *android/ctest-link/* ]]'
-o=$(r hooks runtime/rewriter/rewriter.c); ck "改改写器（runtime/rewriter/rewriter.c）→ 原生 + gfx + 鸿蒙钩子（ohos/gate.sh 路由含 runtime/rewriter/：鸿蒙复用同一改写器；实得：${o}）" '[ "$(echo $o)" = "graphics/gate.sh ohos/gate.sh runtime/gate.sh" ]'
+o=$(r hooks runtime/rewriter/rewriter.c); ck "改改写器（runtime/rewriter/rewriter.c）→ 原生 + gfx + 鸿蒙 + 安卓钩子（ohos/gate.sh 路由含 runtime/rewriter/：鸿蒙复用同一改写器；android/gate.sh 11-26 按实测读数加 runtime/rewriter/；实得：${o}）" '[ "$(echo $o)" = "android/gate.sh graphics/gate.sh ohos/gate.sh runtime/gate.sh" ]'
 o=$(r hooks weird/x.c); ck "表外代码路径 → 钩子全跑（实得：${o}）" '[ "$(wc -w <<< "$o" | tr -d " ")" = "$(find . -mindepth 2 -maxdepth 4 -name gate.sh -not -path "./tools/*" -not -path "./.git/*" | wc -l | tr -d " ")" ]'
 o=$(r hooks launchers/macos/Sources/S2ArmLauncher/Store.swift); ck "改 Mac 前端 → 仅 Mac 钩子、iOS 不跑" '[ "$o" = "launchers/macos/gate.sh " ] && [ "$(r ios launchers/macos/Sources/S2ArmLauncher/Store.swift)" = "no " ]'
 o=$(r hooks pack/roots.sh); ck "公共 pack 文件保留单测路由、不挂前端钩子" '[ -z "$(echo "$o" | tr -d " ")" ] && [[ "$(r tests pack/roots.sh)" == *tests/pack_test.sh* ]]'
 o=$(r hooks tools/toolchain.sh); ck "公共工具链保留原有路由、不挂前端钩子" '[ -z "$(echo "$o" | tr -d " ")" ] && [ "$(r ios tools/toolchain.sh)" = "no " ]'
 # tool 档要跑的钩子 = 文件头「# 门禁路由：」明确点到改动的（10-31：原先 tool 档一个钩子都不跑）
-o=$(r claimed pack/jobs/core.py pack/contracts/README.md); ck "改 pack/jobs/ → claimed 只出 Mac 钩子（实得：${o}）" '[ "$o" = "launchers/macos/gate.sh " ]'
+o=$(r claimed pack/jobs/core.py pack/contracts/README.md); ck "改 pack/jobs/ → claimed 出 Mac 钩子 + 安卓钩子（android/gate.sh 11-26 按实测读数加 pack/jobs/：安卓应用层单测读它；实得：${o}）" '[ "$o" = "android/gate.sh launchers/macos/gate.sh " ]'
 o=$(r claimed tools/gate_plan.sh tests/gate_plan_same_test.sh pack/roots.sh); ck "改纯本线工具 → claimed 0 个钩子、不吃表外兜底（实得：${o}）" '[ -z "$(echo "$o" | tr -d " ")" ]'
 o=$(r claimed weird/x.c); ck "表外代码路径 → claimed 不兜底全跑（全跑归 full 档 hooks；实得：${o}）" '[ -z "$(echo "$o" | tr -d " ")" ]'
 ck "空改动 → 单测全跑（$NT 份）" '[ "$(r tests | wc -w | tr -d " ")" = "$NT" ]'
@@ -83,8 +83,8 @@ cat > "$T/c/tests/zz_hostsrcs_test.sh" << 'PROBE'
 printf '%s\n' 'x:;@echo $(HOST_SRCS)' | make -s -f Makefile -f - x
 PROBE
 (cd "$T/c" && git add tests/zz_hostsrcs_test.sh && git -c user.email=t@t -c user.name=t commit -qm probe) > /dev/null 2>&1
-m0=$(stat -f %m "$T/c/build/.host_cfg" 2> /dev/null || stat -c %Y "$T/c/build/.host_cfg"); (cd "$T/c" && S2A_CS=1 python3 tools/gate_route.py tests macos/front_mac.m > "$T/o" 2> /dev/null)
-m1=$(stat -f %m "$T/c/build/.host_cfg" 2> /dev/null || stat -c %Y "$T/c/build/.host_cfg")
+m0=$(stat -c %Y "$T/c/build/.host_cfg" 2> /dev/null || stat -f %m "$T/c/build/.host_cfg"); (cd "$T/c" && S2A_CS=1 python3 tools/gate_route.py tests macos/front_mac.m > "$T/o" 2> /dev/null)
+m1=$(stat -c %Y "$T/c/build/.host_cfg" 2> /dev/null || stat -f %m "$T/c/build/.host_cfg")
 ck "算构建清单不碰本树 build/：配置戳内容 / 修改时间不变、不起 C# 构建，路由照常（含展开构建清单的探针单测）" '[ "$(cat "$T/c/build/.host_cfg")" = "S2A_CS= sentinel" ] && [ "$m0" = "$m1" ] && [ ! -e "$T/c/build/cs" ] && grep -q zz_hostsrcs_test "$T/o"'
 rm -rf "$T"
 # 覆盖面缓存（11-14：同内容只算一次，存 git 公共目录 s2a-gate-route/）：同树二次调用与关缓存结果逐字相同、且快；

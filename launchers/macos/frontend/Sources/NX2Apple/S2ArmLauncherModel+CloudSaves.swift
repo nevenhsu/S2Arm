@@ -101,7 +101,7 @@ extension S2ArmLauncherModel {
                     .replacingOccurrences(of: "{1}", with: c.savedAt.map(time.string) ?? "").replacingOccurrences(of: "{2}", with: size))
         }
         alert.addButton(withTitle: loc.t("s2arm.cloud.conflict.later"))
-        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        let index = LauncherWindowPresenter.current.runAlert(alert).rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         return index >= 0 && index < min(3, choices.count) ? choices[index] : nil
     }
 }
