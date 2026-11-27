@@ -203,4 +203,23 @@ final class ControllerTestModelTests: XCTestCase {
         let png = NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!
         try png.write(to: URL(fileURLWithPath: out))
     }
+
+    /// 转轴跟水平朝向无关：起始姿态整个转一个水平角度，转完的目标也只差同一个水平角度（实机 11-27：第 6 步「前端往下壓」示意成侧翻，因为用了世界的「右」当轴）
+    func testRotateAxesIgnoreHeading() {
+        let yaw = simd_quatd(angle: 1.1, axis: SIMD3(0, 0, 1))
+        for side in ["L", "R"] {
+            for (hold, axis, deg) in [(ControllerTestFlow.Hold.paddle, ControllerTestFlow.Axis.farEndTip, -90.0), (.boxing, .faceForward, 45), (.paddle, .bodyLong, 90)] {
+                let start = ControllerTestFlow.pose(hold, side: side)
+                let a = ControllerTestFlow.rotated(start, axis, degrees: deg, side: side)
+                let b = ControllerTestFlow.rotated(yaw * start, axis, degrees: deg, side: side)
+                XCTAssertLessThan(ControllerTestFlow.angle(yaw * a, b), 0.01, "\(hold) \(axis) \(side)")
+            }
+            // 远端往下压：远端（右只 +Y、左只 −Y）转到朝下
+            let tipped = ControllerTestFlow.rotated(yaw * ControllerTestFlow.pose(.paddle, side: side), .farEndTip, degrees: -90, side: side)
+            XCTAssertLessThan(tipped.act(SIMD3(0, side == "L" ? -1 : 1, 0)).z, -0.99)
+            // 往右倾：顶端（+Y）往人的右边倒（标准姿态下就是世界 +X）
+            let leaned = ControllerTestFlow.rotated(ControllerTestFlow.pose(.boxing, side: side), .faceForward, degrees: 45, side: side)
+            XCTAssertGreaterThan(leaned.act(SIMD3(0, 1, 0)).x, 0.7)
+        }
+    }
 }

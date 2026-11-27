@@ -334,7 +334,15 @@ struct ControllerTestStep: Equatable {
         channel.add(s, at: t, tip: Self.tip)
         record(s, side: channel.side)
     }
-    func recenter() { channels.forEach { $0.recenter() } }
+    /// 歸正：各边转水平朝向；这一轮记下的各步姿态跟着转同一份，示意模型才不会跟手上的错开
+    func recenter() {
+        for c in channels {
+            let before = c.rawPose.q
+            c.recenter()
+            let delta = c.rawPose.q * before.inverse
+            for (i, var starts) in stepStarts { if let q = starts[c.side] { starts[c.side] = simd_normalize(delta * q); stepStarts[i] = starts } }
+        }
+    }
 
     private func attachMotion(_ id: ObjectIdentifier) {
         guard let pad = GCController.controllers().first(where: { ObjectIdentifier($0) == id }) else { return }
@@ -419,6 +427,14 @@ struct ControllerTestStep: Equatable {
         case .pair: return selected?.isPair == true
         }
     }
+    /// 右上角示意图：这一步的标准目标姿态；转动 / 回去类的步骤附上前一步的标准姿态（示意从那里转过来）。没开始 / 手柄不合这一步就 nil
+    func illustration(side: String) -> (from: simd_quatd?, to: simd_quatd)? {
+        guard running, let step, step.target != .manual, stepFitsSelection else { return nil }
+        let poses = flow.illustration(side: side)
+        guard poses.indices.contains(stepIndex) else { return nil }
+        if case .hold = step.target { return (nil, poses[stepIndex]) }
+        return (stepIndex > 0 ? poses[stepIndex - 1] : nil, poses[stepIndex])
+    }
     /// 某一步做完时的姿态 = 下一步开始时记下的
     private func endPose(of id: String, side: String) -> simd_quatd? {
         guard let i = flow.steps.firstIndex(where: { $0.id == id }) else { return nil }
@@ -432,7 +448,7 @@ struct ControllerTestStep: Equatable {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
         case let .rotate(axis, degrees, from):
             guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
-            return ControllerTestFlow.rotated(base, axis, degrees: degrees)
+            return ControllerTestFlow.rotated(base, axis, degrees: degrees, side: side)
         // 从中间某一步开始、那一步还没做过：用标准示意姿态（水平朝向跟着手上那只）
         case let .back(to): return endPose(of: to, side: side) ?? ControllerTestFlow.yawAligned(flow.illustration(side: side)[stepIndex], to: channel.rawPose.q)
         case .manual: return nil

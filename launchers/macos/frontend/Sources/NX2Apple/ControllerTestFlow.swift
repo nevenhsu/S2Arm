@@ -12,7 +12,9 @@ import simd
 struct ControllerTestFlow {
     enum Who: Equatable { case single, pair }
     enum Hold: Equatable { case flat, paddle, boxing }
-    enum Axis: Equatable { case worldUp, worldForward, worldRight, bodyLong }
+    /// 转轴：worldUp 跟水平朝向无关；其余按手柄自己的方向定（水平朝向没有绝对参考，世界的「前 / 右」不一定是人的前 / 右）
+    ///   farEndTip = 远端那头往下压的轴（右只远端 +Y、左只远端 −Y，横握时摇杆那头朝人）；faceForward = 拳击握法时人的前方（右只 −X、左只 +X）为轴
+    enum Axis: Equatable { case worldUp, farEndTip, faceForward, bodyLong }
     enum Target: Equatable {
         case hold(Hold)
         /// 从某一步做完时的姿态（from = 那一步的 id；nil = 上一步做完 / 这一步开始时）绕轴转几度
@@ -42,11 +44,11 @@ struct ControllerTestFlow {
         Step(id: "3-start", hant: "回到起始姿勢", hans: "回到起始姿势", en: "Back to the start pose", who: .single, target: .back(to: "1-start")),
         Step(id: "4-face-right", hant: "按鍵面往右翻 90°", hans: "按键面往右翻 90°", en: "Roll the button face 90° to the right", who: .single, target: .rotate(.bodyLong, degrees: 90, from: "1-start")),
         Step(id: "5-start", hant: "回到起始姿勢", hans: "回到起始姿势", en: "Back to the start pose", who: .single, target: .back(to: "1-start")),
-        Step(id: "6-tip-down", hant: "前端往下壓 90°", hans: "前端往下压 90°", en: "Tip the far end down 90°", who: .single, target: .rotate(.worldRight, degrees: -90, from: "1-start")),
+        Step(id: "6-tip-down", hant: "前端往下壓 90°", hans: "前端往下压 90°", en: "Tip the far end down 90°", who: .single, target: .rotate(.farEndTip, degrees: -90, from: "1-start")),
         Step(id: "7-boxing", hant: "換成一對：左右手各拿一只立起來（拳擊握法），按鍵面朝向彼此", hans: "换成一对：左右手各拿一只立起来（拳击握法），按键面朝向彼此",
              en: "Now the pair: one in each hand, upright (boxing grip), button faces toward each other", who: .pair, target: .hold(.boxing)),
-        Step(id: "8-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.worldForward, degrees: 45, from: "7-boxing")),
-        Step(id: "9-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.worldForward, degrees: -45, from: "7-boxing")),
+        Step(id: "8-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "7-boxing")),
+        Step(id: "9-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "7-boxing")),
     ])
 
     /// steps.json（临时流程，盖过内建）：只有文字，手动下一步
@@ -79,13 +81,17 @@ struct ControllerTestFlow {
         }
         return simd_quatd(simd_double3x3(x, y, z))
     }
-    /// 相对转动：从开始姿态 start 绕轴转 degrees
-    static func rotated(_ start: simd_quatd, _ axis: Axis, degrees: Double) -> simd_quatd {
+    /// 相对转动：从开始姿态 start 绕轴转 degrees（side：L / R，左右只的「远端」「前方」不同）
+    static func rotated(_ start: simd_quatd, _ axis: Axis, degrees: Double, side: String = "R") -> simd_quatd {
+        let up = SIMD3<Double>(0, 0, 1), right = side != "L"
+        func horizontal(_ v: SIMD3<Double>) -> SIMD3<Double> { let h = SIMD3(v.x, v.y, 0); return simd_length(h) > 1e-6 ? simd_normalize(h) : SIMD3(0, 1, 0) }
         let a: SIMD3<Double>
         switch axis {
-        case .worldUp: a = SIMD3(0, 0, 1)
-        case .worldForward: a = SIMD3(0, 1, 0)
-        case .worldRight: a = SIMD3(1, 0, 0)
+        case .worldUp: a = up
+        // 远端往下：远端的水平方向 f，绕 f × 上 转负角（f 朝前时就是绕「右」转 −90°）
+        case .farEndTip: a = simd_normalize(simd_cross(horizontal(start.act(SIMD3(0, right ? 1 : -1, 0))), up))
+        // 往右倾：绕人的前方转正角（顶端往右）
+        case .faceForward: a = horizontal(start.act(SIMD3(right ? -1 : 1, 0, 0)))
         case .bodyLong: a = start.act(SIMD3(0, 1, 0))
         }
         return simd_normalize(simd_quatd(angle: degrees * .pi / 180, axis: a) * start)
@@ -112,7 +118,7 @@ struct ControllerTestFlow {
         for step in steps {
             switch step.target {
             case let .hold(hold): current = Self.pose(hold, side: side)
-            case let .rotate(axis, degrees, from): current = Self.rotated(from.flatMap { ends[$0] } ?? current, axis, degrees: degrees)
+            case let .rotate(axis, degrees, from): current = Self.rotated(from.flatMap { ends[$0] } ?? current, axis, degrees: degrees, side: side)
             case let .back(to): current = ends[to] ?? current
             case .manual: break
             }

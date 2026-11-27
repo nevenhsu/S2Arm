@@ -167,6 +167,13 @@ struct ControllerTestPanelView: View {
                 } else {
                     Text(flow.title).font(.system(size: 11)).foregroundStyle(.tertiary)
                 }
+                // 开始 / 停止放在步骤上面（同时录制）
+                Button { hub.toggleRun() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: hub.running ? "stop.fill" : "play.fill").foregroundStyle(hub.running ? Color.red : Color.green)
+                        Text(hub.running ? SimText.pick("停止", "停止", "Stop") : SimText.pick("開始", "开始", "Start"))
+                    }
+                }
             }
             HStack(spacing: 8) {
                 Text("\(hub.stepIndex + 1) / \(flow.steps.count)").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
@@ -203,16 +210,12 @@ struct ControllerTestPanelView: View {
     // —— 开始 / 停止（同时录制）——
     private var recordSection: some View {
         HStack(spacing: 8) {
-            Button { hub.toggleRun() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: hub.running ? "stop.fill" : "play.fill").foregroundStyle(hub.running ? Color.red : Color.green)
-                    Text(hub.running ? SimText.pick("停止", "停止", "Stop") : SimText.pick("開始", "开始", "Start"))
-                }
-            }
             if hub.isRecording {
                 let secs = Int(ProcessInfo.processInfo.systemUptime - hub.recordStart)
                 Text(SimText.pick("錄製中", "录制中", "Recording") + String(format: " %02d:%02d・", secs / 60, secs % 60) + SimText.pick("\(hub.recordCount) 筆", "\(hub.recordCount) 笔", "\(hub.recordCount) rows"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
+            } else if hub.recordError == nil {
+                Text(SimText.pick("按「開始」同時錄製", "按「开始」同时录制", "Start also records")).font(.system(size: 11)).foregroundStyle(.tertiary)
             } else if let error = hub.recordError {
                 Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(1)
             }
@@ -260,7 +263,7 @@ private struct ChannelColumn: View {
                 }
             }
             let pose = hub.poseFromGame ? channel.gamePose : channel.rawPose
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .topLeading) {
                 PoseView(pose: pose, ghost: hub.poseFromGame ? nil : hub.ghost(for: channel), trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
                          shape: wholePad ? .wholePad : channel.side == "R" ? .joyConRight : .joyConLeft,
                          tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
@@ -268,7 +271,19 @@ private struct ChannelColumn: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 if let s {
                     Text(PoseText.describe(hub.poseFromGame ? ControllerTestIMU.gameView(s, shape: channel.shape) : s, pose: pose))
-                        .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).multilineTextAlignment(.trailing).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
+                        .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
+                }
+                // 测试中：右上角一张实色示意（标准姿态、固定视角），转动类的步骤从上一个姿态循环转到目标，看得出怎么动
+                if let poses = hub.illustration(side: channel.side) {
+                    StepInset(from: poses.from, to: poses.to, shape: wholePad ? .wholePad : channel.side == "R" ? .joyConRight : .joyConLeft,
+                              tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
+                        .frame(width: 120, height: 96)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.black.opacity(0.15)))
+                        .overlay(alignment: .bottomLeading) { Text(SimText.pick("示意", "示意", "Guide")).font(.system(size: 9)).foregroundStyle(Color(white: 0.43)).padding(4) }
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .topTrailing)
+                        .allowsHitTesting(false)
                 }
             }
             group(SimText.pick("加速度", "加速度", "Accelerometer"), unit: "g", values: s.map { [$0.accel.x, $0.accel.y, $0.accel.z] }, range: 2, format: "%+.2f")
@@ -363,6 +378,7 @@ struct PoseView: NSViewRepresentable {
         view.backgroundColor = NSColor(calibratedRed: 0.96, green: 0.97, blue: 0.98, alpha: 1)
         view.antialiasingMode = .multisampling4X
         view.autoenablesDefaultLighting = true
+        view.allowsCameraControl = true   // 拖动转视角、捏合缩放；双击回到原视角
         c.world.eulerAngles.x = -.pi / 2
         c.scene.rootNode.addChildNode(c.world)
         c.world.addChildNode(c.device)
@@ -468,5 +484,46 @@ struct PoseView: NSViewRepresentable {
             }
             return true
         }
+    }
+}
+
+/// 步骤示意（右上角小图）：实色模型、固定斜视角；有 from 时循环从 from 转到 to（转 1.2 秒、停 0.8 秒）
+struct StepInset: NSViewRepresentable {
+    let from: simd_quatd?
+    let to: simd_quatd
+    let shape: PoseView.Shape
+    let tint: ControllerTint?
+    final class Coordinator { let model = SCNNode(); var shape: PoseView.Shape?; var tint: ControllerTint?; var key: simd_quatd?; var startedAt = 0.0 }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> SCNView {
+        let view = SCNView(), scene = SCNScene(), world = SCNNode()
+        view.scene = scene
+        view.backgroundColor = NSColor(calibratedRed: 0.93, green: 0.95, blue: 0.98, alpha: 1)
+        view.antialiasingMode = .multisampling4X
+        view.autoenablesDefaultLighting = true
+        world.eulerAngles.x = -.pi / 2
+        scene.rootNode.addChildNode(world)
+        world.addChildNode(context.coordinator.model)
+        let camera = SCNNode(); camera.camera = SCNCamera(); camera.camera?.fieldOfView = 40; camera.camera?.zNear = 0.01
+        camera.position = SCNVector3(0.1, 0.11, 0.21); camera.look(at: SCNVector3(0, 0, 0))
+        scene.rootNode.addChildNode(camera); view.pointOfView = camera
+        return view
+    }
+    func updateNSView(_ view: SCNView, context: Context) {
+        let c = context.coordinator
+        if c.shape != shape || c.tint != tint {
+            c.shape = shape; c.tint = tint
+            c.model.childNodes.forEach { $0.removeFromParentNode() }
+            PoseView.build(shape, tint: tint, into: c.model)
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if c.key.map({ ControllerTestFlow.angle($0, to) > 0.5 }) ?? true { c.key = to; c.startedAt = now }   // 换步骤：动画从头
+        var q = to
+        if let from {
+            let phase = (now - c.startedAt).truncatingRemainder(dividingBy: 2.0)
+            let t = min(1, phase / 1.2)
+            q = simd_slerp(from, to, t * t * (3 - 2 * t))
+        }
+        c.model.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
     }
 }
