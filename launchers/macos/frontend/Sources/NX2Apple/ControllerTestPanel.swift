@@ -18,7 +18,8 @@ struct ControllerTestMenu: View {
     static func show() {
         let title = SimText.pick("手把測試", "手柄测试", "Controller Test")
         if let panel { panel.title = title; panel.orderFront(nil); ControllerTestHub.shared.panelOpened(); return }
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 720),
+        // 缺省宽一点：一对两栏时手柄画面才不会被右上角的示意盖住（11-27）
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 880, height: 780),
                         styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
         p.title = title
         p.isFloatingPanel = true
