@@ -5,15 +5,15 @@
 //   · 相对转动（rotate）：从这一步开始时的姿态，绕某个轴转几度（往右转 = 绕世界竖轴 −90°）
 //   · 回到上一步开始时的姿态（back）
 //   实录对照（11-27 一对录制）：平放面朝上 ≈ (0, +0.12, +1.0) g；右只横拿、摇杆那头朝人、滑轨朝上 ≈ (−0.96, 0, 0)（内建流程改用滑轨朝下 = +X 朝上）；
-//   拳击握法（立起）≈ (±0.2, +0.98, ∓0.1)；横拿时沿长轴翻，陀螺 Y 积分 ≈ +98°
+//   立握≈ (±0.2, +0.98, ∓0.1)；横拿时沿长轴翻，陀螺 Y 积分 ≈ +98°
 import Foundation
 import simd
 
 struct ControllerTestFlow {
     enum Who: Equatable { case single, pair }
-    enum Hold: Equatable { case flat, paddle, boxing, handlebar }
+    enum Hold: Equatable { case flat, edge, upright, handlebar }
     /// 转轴：worldUp 跟水平朝向无关；其余按手柄自己的方向定（水平朝向没有绝对参考，世界的「前 / 右」不一定是人的前 / 右）
-    ///   farEndTip = 远端那头往下压的轴（横握时两只的顶端 +Y 都朝前）；faceForward = 拳击握法时人的前方（右只 −X、左只 +X）为轴
+    ///   farEndTip = 远端那头往下压的轴（横握时两只的顶端 +Y 都朝前）；faceForward = 立握时人的前方（右只 −X、左只 +X）为轴
     enum Axis: Equatable { case worldUp, farEndTip, faceForward, bodyLong }
     enum Target: Equatable {
         case hold(Hold)
@@ -40,7 +40,7 @@ struct ControllerTestFlow {
     /// 单只 Joy-Con 2：起始姿势「横握・立」，回起始姿势只在下一个动作前需要时出现一次
     static let joyConSingle = ControllerTestFlow(id: "joycon-single", hant: "Joy-Con 單只測試", hans: "Joy-Con 单只测试", en: "Joy-Con single test", steps: [
         Step(id: "1-start", hant: "橫握・立：連接邊（滑軌）朝下立起來，搖桿朝向身體中間（右只朝左、左只朝右）", hans: "横握・立：连接边（滑轨）朝下立起来，摇杆朝向身体中间（右只朝左、左只朝右）",
-             en: "Sideways, standing on the rail edge, stick facing the middle (right one faces left, left one faces right)", who: .single, target: .hold(.paddle)),
+             en: "Sideways, standing on the rail edge, stick facing the middle (right one faces left, left one faces right)", who: .single, target: .hold(.edge)),
         Step(id: "2-forehand", hant: "往正手方向水平轉 90°（右只往右、左只往左），停在收拍的位置", hans: "往正手方向水平转 90°（右只往右、左只往左），停在收拍的位置",
              en: "Turn 90° the forehand way (right one to the right, left one to the left) and stop at the finish", who: .single,
              target: .rotate(.worldUp, degrees: -90, from: "1-start", mirror: true)),
@@ -51,14 +51,14 @@ struct ControllerTestFlow {
     ])
     /// 一对 Joy-Con 2：每次倾斜都从立直算，不另加「回正」
     static let joyConPair = ControllerTestFlow(id: "joycon-pair", hant: "Joy-Con 一對測試", hans: "Joy-Con 一对测试", en: "Joy-Con pair test", steps: [
-        Step(id: "1-boxing", hant: "左右手各拿一只立起來（拳擊握法），按鍵面朝向彼此", hans: "左右手各拿一只立起来（拳击握法），按键面朝向彼此",
-             en: "One in each hand, upright (boxing grip), button faces toward each other", who: .pair, target: .hold(.boxing)),
-        Step(id: "2-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "1-boxing")),
-        Step(id: "3-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "1-boxing")),
+        Step(id: "1-upright", hant: "左右手各拿一只立起來，按鍵面朝向彼此", hans: "左右手各拿一只立起来，按键面朝向彼此",
+             en: "One in each hand, upright, button faces toward each other", who: .pair, target: .hold(.upright)),
+        Step(id: "2-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "1-upright")),
+        Step(id: "3-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "1-upright")),
         // 把手握法：两只横拿当左右把手（左只 ZL 在右、右只 ZR 在左，摇杆朝下），像转把手一样一起左右转，右手那只往自己方向转是加油门
         Step(id: "4-handlebar", hant: "兩手各橫拿一只當把手：左只 ZL 在右、右只 ZR 在左，搖桿都朝下", hans: "两手各横拿一只当把手：左只 ZL 在右、右只 ZR 在左，摇杆都朝下",
              en: "Hold one sideways in each hand like handlebars: left one's ZL end on the right, right one's ZR end on the left, sticks facing down", who: .pair, target: .hold(.handlebar)),
-        // 把手往左下 / 右下倾：绕人的前方转（把手的滑轨朝前，同拳击握法用的 faceForward 轴）
+        // 把手往左下 / 右下倾：绕人的前方转（把手的滑轨朝前，同立握用的 faceForward 轴）
         Step(id: "5-tilt-right", hant: "兩只一起往右下傾斜 30°（右邊往下）", hans: "两只一起往右下倾斜 30°（右边往下）", en: "Tilt both 30° down to the right (right side down)",
              who: .pair, target: .rotate(.faceForward, degrees: 30, from: "4-handlebar")),
         Step(id: "6-tilt-left", hant: "兩只一起往左下傾斜 30°（左邊往下，從水平算）", hans: "两只一起往左下倾斜 30°（左边往下，从水平算）", en: "Tilt both 30° down to the left (left side down, from level)",
@@ -85,8 +85,8 @@ struct ControllerTestFlow {
     static func up(_ hold: Hold, side: String = "R") -> SIMD3<Double> {
         switch hold {
         case .flat: return SIMD3(0, 0, 1)
-        case .paddle: return SIMD3(side == "L" ? -1 : 1, 0, 0)   // 滑轨朝下（滑轨：右只 −X、左只 +X）
-        case .boxing: return SIMD3(0, 1, 0)
+        case .edge: return SIMD3(side == "L" ? -1 : 1, 0, 0)   // 滑轨朝下（滑轨：右只 −X、左只 +X）
+        case .upright: return SIMD3(0, 1, 0)
         case .handlebar: return SIMD3(0, 0, -1)   // 按键面朝下
         }
     }
@@ -97,11 +97,11 @@ struct ControllerTestFlow {
         let (x, y, z): (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>)
         switch hold {
         case .flat: (x, y, z) = (SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1))
-        // 桌球握法（11-27 使用者定：连接边 / 滑轨朝下，两只的摇杆朝向对方）。滑轨在右只 −X、左只 +X 那侧，所以右只 X 朝上、左只 X 朝下；
+        // 横握・立（11-27 使用者定：连接边 / 滑轨朝下，两只的摇杆朝向对方）。滑轨在右只 −X、左只 +X 那侧，所以右只 X 朝上、左只 X 朝下；
         //   按键面右只朝左、左只朝右；这样两只的顶端（肩键那头，+Y）都朝前
-        case .paddle: (x, y, z) = right ? (SIMD3(0, 0, 1), SIMD3(0, 1, 0), SIMD3(-1, 0, 0)) : (SIMD3(0, 0, -1), SIMD3(0, 1, 0), SIMD3(1, 0, 0))
-        // 拳击握法：顶端朝上，按键面朝向另一只（右只朝左、左只朝右）
-        case .boxing: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)) : (SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(1, 0, 0))
+        case .edge: (x, y, z) = right ? (SIMD3(0, 0, 1), SIMD3(0, 1, 0), SIMD3(-1, 0, 0)) : (SIMD3(0, 0, -1), SIMD3(0, 1, 0), SIMD3(1, 0, 0))
+        // 立握：顶端朝上，按键面朝向另一只（右只朝左、左只朝右）
+        case .upright: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)) : (SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(1, 0, 0))
         // 把手握法（11-27 使用者定）：横拿，左只 ZL 那头（顶端 +Y）在右、右只 ZR 那头在左，摇杆（按键面）都朝下；两只的滑轨都朝前
         case .handlebar: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(-1, 0, 0), SIMD3(0, 0, -1)) : (SIMD3(0, 1, 0), SIMD3(1, 0, 0), SIMD3(0, 0, -1))
         }

@@ -106,28 +106,28 @@ final class ControllerTestModelTests: XCTestCase {
 
     /// 内建流程的固定姿势：完整姿态里的重力方向要等于用来比对的 up（两份写法不能各说各话），左右只都一样
     func testFlowHoldPosesAgreeWithGravity() {
-        for hold in [ControllerTestFlow.Hold.flat, .paddle, .boxing] {
+        for hold in [ControllerTestFlow.Hold.flat, .edge, .upright] {
             for side in ["L", "R"] {
                 let q = ControllerTestFlow.pose(hold, side: side)
                 XCTAssertEqual(simd_length(q.vector), 1, accuracy: 1e-9)
                 XCTAssertLessThan(ControllerTestFlow.angle(q.inverse.act(PoseFilter.up), ControllerTestFlow.up(hold, side: side)), 0.01, "\(hold) \(side)")
             }
         }
-        // 实录：右只桌球握法 ≈ (−0.96, 0, 0) g，拳击握法 ≈ (0.2, 0.98, −0.1) g：都在 20° 以内
-        // 桌球握法用滑轨朝下（实录滑轨朝上是 (−0.96, 0, 0)，反过来就是 +X 朝上）
-        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.96, 0, 0), ControllerTestFlow.up(.paddle)), ControllerTestFlow.tolerance)
+        // 实录：右只横握（滑轨朝上）≈ (−0.96, 0, 0) g，立握 ≈ (0.2, 0.98, −0.1) g：都在 20° 以内
+        // 横握・立用滑轨朝下（实录滑轨朝上是 (−0.96, 0, 0)，反过来就是 +X 朝上）
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.96, 0, 0), ControllerTestFlow.up(.edge)), ControllerTestFlow.tolerance)
         // 滑轨（右只 −X、左只 +X）朝下；第 4 步翻完两只按键面都朝上
-        XCTAssertLessThan(ControllerTestFlow.pose(.paddle, side: "R").act(SIMD3(-1, 0, 0)).z, -0.99)
-        XCTAssertLessThan(ControllerTestFlow.pose(.paddle, side: "L").act(SIMD3(1, 0, 0)).z, -0.99)
+        XCTAssertLessThan(ControllerTestFlow.pose(.edge, side: "R").act(SIMD3(-1, 0, 0)).z, -0.99)
+        XCTAssertLessThan(ControllerTestFlow.pose(.edge, side: "L").act(SIMD3(1, 0, 0)).z, -0.99)
         for side in ["L", "R"] {
             let faceUp = ControllerTestFlow.joyConSingle.illustration(side: side)[3]
             XCTAssertGreaterThan(faceUp.act(SIMD3(0, 0, 1)).z, 0.99, side)
         }
-        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.2, 0.98, -0.1), ControllerTestFlow.up(.boxing)), ControllerTestFlow.tolerance)
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.2, 0.98, -0.1), ControllerTestFlow.up(.upright)), ControllerTestFlow.tolerance)
         XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0, 0.12, 1.0), ControllerTestFlow.up(.flat)), ControllerTestFlow.tolerance)
     }
 
-    /// 相对转动：绕长轴 +90°（实录：桌球握法把按键面往右翻，陀螺 Y 积分 ≈ +98°）= 用陀螺 Y 积分出来的同一个姿态
+    /// 相对转动：绕长轴 +90°（实录：横握时沿长轴翻，陀螺 Y 积分 ≈ +98°）= 用陀螺 Y 积分出来的同一个姿态
     func testFlowRotateMatchesGyroIntegration() {
         var pose = PoseFilter(); pose.gain = 0
         pose.update(IMUSample(accel: SIMD3(-1, 0, 0), gyro: .zero), dt: 0)
@@ -141,7 +141,7 @@ final class ControllerTestModelTests: XCTestCase {
 
     /// 淡色模型的水平朝向跟着手上那只：只差倾斜，水平朝向一样
     func testYawAlignedKeepsTilt() {
-        let target = ControllerTestFlow.pose(.paddle, side: "R")
+        let target = ControllerTestFlow.pose(.edge, side: "R")
         let live = simd_quatd(angle: 1.2, axis: SIMD3(0, 0, 1)) * target
         XCTAssertLessThan(ControllerTestFlow.angle(ControllerTestFlow.yawAligned(target, to: live), live), 0.01)
         let tilted = simd_quatd(angle: 0.5, axis: SIMD3(1, 0, 0)) * live
@@ -247,17 +247,17 @@ final class ControllerTestModelTests: XCTestCase {
     func testRotateAxesIgnoreHeading() {
         let yaw = simd_quatd(angle: 1.1, axis: SIMD3(0, 0, 1))
         for side in ["L", "R"] {
-            for (hold, axis, deg) in [(ControllerTestFlow.Hold.paddle, ControllerTestFlow.Axis.farEndTip, -90.0), (.boxing, .faceForward, 45), (.paddle, .bodyLong, 90)] {
+            for (hold, axis, deg) in [(ControllerTestFlow.Hold.edge, ControllerTestFlow.Axis.farEndTip, -90.0), (.upright, .faceForward, 45), (.edge, .bodyLong, 90)] {
                 let start = ControllerTestFlow.pose(hold, side: side)
                 let a = ControllerTestFlow.rotated(start, axis, degrees: deg, side: side)
                 let b = ControllerTestFlow.rotated(yaw * start, axis, degrees: deg, side: side)
                 XCTAssertLessThan(ControllerTestFlow.angle(yaw * a, b), 0.01, "\(hold) \(axis) \(side)")
             }
             // 远端往下压：远端（+Y）转到朝下
-            let tipped = ControllerTestFlow.rotated(yaw * ControllerTestFlow.pose(.paddle, side: side), .farEndTip, degrees: -90, side: side)
+            let tipped = ControllerTestFlow.rotated(yaw * ControllerTestFlow.pose(.edge, side: side), .farEndTip, degrees: -90, side: side)
             XCTAssertLessThan(tipped.act(SIMD3(0, 1, 0)).z, -0.99)
             // 往右倾：顶端（+Y）往人的右边倒（标准姿态下就是世界 +X）
-            let leaned = ControllerTestFlow.rotated(ControllerTestFlow.pose(.boxing, side: side), .faceForward, degrees: 45, side: side)
+            let leaned = ControllerTestFlow.rotated(ControllerTestFlow.pose(.upright, side: side), .faceForward, degrees: 45, side: side)
             XCTAssertGreaterThan(leaned.act(SIMD3(0, 1, 0)).x, 0.7)
         }
     }

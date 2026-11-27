@@ -149,6 +149,34 @@ defaults write <App 的 bundle id> S2AControllerSimulate -bool NO
 
 注意：模拟的手柄会写进给游戏的顺序表（`pad-order.json`），测完在面板里按「全部清除」再开游戏。
 
+### 手柄测试（开发用）
+
+看手柄的原始体感读数、对照体感转换用（例如手柄左右反、倾斜方向不对时，先确认是读数本身还是转换出了问题）。
+开关跟「模拟手柄」同一个（`S2AControllerSimulate`，同样只在没有更新源的构建里有效），打开后 App 菜单里「模拟手柄」下面多一项「手柄测试」，
+点开是一个浮动面板（开着时手柄弹窗点外面不会收起，可以对着改连接 / 分配）。
+
+- **要看的手柄**：跟手柄面板同一份清单，跟着分配玩家走：Joy-Con 2 拼成一对就是一对、分开就是两只单只；一代 Joy-Con 照分配的单只 / 一对；
+  没有玩家位的手柄也列。这里只能选，连接、拆开、分配都在手柄面板做，两边即时同步。
+- **读数**：原始六轴（加速度 g、陀螺 °/s，未转换），每轴置中长条 + 数字 + 最近 3 秒陀螺波形；一对左右两栏。
+  Joy-Con 2 / Pro 2 手柄的读数走启动器手柄导航那一条连接程序连接（连接程序一次只服务一个客户端，不另开连接），
+  所以游戏进行中、分配玩家中、S2Arm 不在前台时会暂停，面板上写明原因；系统蓝牙手柄读 GameController 的 motion。
+- **3D 姿态**：重力 + 陀螺融合，「归正」重设水平朝向，可拖动转视角。「姿态用」切到「游戏看到的」时，读数先套服务层给游戏的转换
+  （`NpadImu.Push`：单只 Y 镜像、一对绕 X 转 180°；单测会读那个文件对照，两边改了要一起改），转换不对时模型会跟手上的动作相反。
+- **测试流程**：按「开始」后依步骤做，每步有浅蓝色的目标模型和右上角的示意图，对上并停住 1 秒自动下一步；「上一步 / 下一步」可以选从哪一步开始。
+  流程跟着选的手柄定：单只 Joy-Con → 单只测试，一对 → 一对测试（`ControllerTestFlow.swift`）。
+  `~/S2Arm/dev/controller-test/steps.json` 存在时改用它（只有文字、手动下一步，格式见 `ControllerTestStep.parse`）。
+- **录制**：按「开始」同时录，每次一个 `~/S2Arm/dev/controller-test/readings-<时间>-<流程>.tsv`（时间、手柄、左右、步骤、六轴）。
+
+现在只做了 Joy-Con 的测试流程（Joy-Con 2；一代 Joy-Con 用同一套步骤，但读数口径还没有真机校对，见 `Gen1Axes`）。
+其他手柄（Pro 手柄、PS、Xbox 等）的体感测试可以接着加在这里：在 `ControllerTestFlow` 加一套流程和目标姿态，
+`ControllerTestHub.pickFlow` 按选的手柄换过去。改步骤后可以出示意图检查：
+
+```sh
+S2A_FLOW_RENDER=/tmp/flow.png swift test --package-path launchers/macos/frontend --filter testRenderFlowSheet
+```
+
+（`S2A_FLOW_RENDER_FLOW=single|pair` 只出一套，`S2A_FLOW_RENDER_SIDE=L|R` 单只的步骤只画那一只，`S2A_FLOW_RENDER_MODEL=gen1` 画一代 Joy-Con。）
+
 ## DMG installation window / 拖拽安装窗口
 
 安装窗口沿用 [GitHub Pages 下载页](../../docs/site/index.html) 的近黑底、奶油白、

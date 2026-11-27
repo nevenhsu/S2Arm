@@ -1,9 +1,9 @@
 // S2Arm（不是上游文件）：手柄测试面板的数据（开发工具，本地 / 自测构建才有，开关同「模擬手把」）。
 //   面板（ControllerTestPanel）看连着的一只手柄：原始六轴、姿态、步骤、录制，用来对照体感转换（服务层 NpadImu.Push）对不对。
 //   读数来源：
-//   · Joy-Con 2 / Switch 2 Pro：启动器手柄导航那一条连接程序连接（LauncherPadSource）顺带开体感（连接程序一次只服务一个客户端，
+//   · Joy-Con 2 / Pro 2 手柄：启动器手柄导航那一条连接程序连接（LauncherPadSource）顺带开体感（连接程序一次只服务一个客户端，
 //     另开一条会把导航和游戏宿主踢掉）。游戏进行中 / 分配玩家中这条连接本来就放开，读数跟着停
-//   · 系统蓝牙手柄（PS5 / PS4 / Xbox / Switch Pro 等）：GameController 的 motion（选中时才开感测器）
+//   · 系统蓝牙手柄（PS5 / PS4 / Xbox / 一代 Pro 手柄等）：GameController 的 motion（选中时才开感测器）
 //   一代 Joy-Con 的 HID 读数还没接（只列出经系统认到的那份）
 import AppKit
 import Combine
@@ -120,7 +120,7 @@ struct ControllerTestStep: Equatable {
     // —— 要看的手柄 ——
     struct Target: Identifiable, Equatable {
         enum Kind: Equatable {
-            case relay(player: Int, shape: ControllerTestIMU.Shape)   // Joy-Con 2 / Switch 2 Pro（连接程序）
+            case relay(player: Int, shape: ControllerTestIMU.Shape)   // Joy-Con 2 / Pro 2 手柄（连接程序）
             case system(ObjectIdentifier)                             // 系统蓝牙手柄
             case gen1(left: String?, right: String?)                  // 一代 Joy-Con（HID 设备 id）：读数取自系统认到的那一只（gen1Owners 对应）
             case simulated                                            // 「模擬手把」加的，没有读数
