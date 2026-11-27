@@ -409,7 +409,7 @@ struct PoseView: NSViewRepresentable {
             c.device.childNodes.forEach { $0.removeFromParentNode() }
             Self.build(shape, tint: tint, into: c.device)
             c.ghost.childNodes.forEach { $0.removeFromParentNode() }
-            Self.build(shape, tint: ControllerTint(body: 0x0a84ff), into: c.ghost)   // 淡蓝：浅底上也看得出
+            Self.build(shape, tint: nil, monochrome: NSColor(calibratedRed: 0.04, green: 0.52, blue: 1, alpha: 1), into: c.ghost)   // 整只淡蓝：跟实色的分得开
         }
         let q = pose.q
         c.device.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
@@ -434,7 +434,9 @@ struct PoseView: NSViewRepresentable {
     }
 
     /// 设备坐标：X 横、Y 长轴（+Y 顶端）、Z 屏幕面朝外（摇杆凸出那面）
-    static func build(_ shape: Shape, tint: ControllerTint?, into node: SCNNode) {
+    /// Joy-Con 2 照真机配色：机身深灰，内侧（滑轨那条）和摇杆圈是颜色（左只浅蓝、右只红；模拟手柄照它的颜色）。
+    ///   monochrome：整只一个颜色（淡色目标模型用）
+    static func build(_ shape: Shape, tint: ControllerTint?, monochrome: NSColor? = nil, into node: SCNNode) {
         func color(_ rgb: UInt32) -> NSColor { NSColor(calibratedRed: CGFloat(rgb >> 16 & 0xff) / 255, green: CGFloat(rgb >> 8 & 0xff) / 255, blue: CGFloat(rgb & 0xff) / 255, alpha: 1) }
         func add(_ g: SCNGeometry, _ c: NSColor, _ p: SCNVector3, rotateX: Bool = false) {
             g.firstMaterial?.diffuse.contents = c
@@ -442,17 +444,20 @@ struct PoseView: NSViewRepresentable {
             if rotateX { n.eulerAngles.x = .pi / 2 }   // 圆柱轴（Y）转到 Z：从屏幕面凸出来
             node.addChildNode(n)
         }
-        let dark = NSColor(calibratedWhite: 0.17, alpha: 1)
+        let dark = monochrome ?? NSColor(calibratedWhite: 0.17, alpha: 1)
         switch shape {
         case .joyConLeft, .joyConRight:
             let right = shape == .joyConRight
-            let body = color(tint?.body ?? (right ? 0xf2a7c3 : 0x7ad3f0))
+            let accent = monochrome ?? color(tint?.body ?? (right ? 0xef5a5a : 0x41b8e8))
+            let body = monochrome ?? color(0x34363b), button = monochrome ?? color(0x5a5c62)
             add(SCNBox(width: 0.034, height: 0.10, length: 0.014, chamferRadius: 0.007), body, SCNVector3(0, 0, 0))
-            add(SCNBox(width: 0.004, height: 0.088, length: 0.012, chamferRadius: 0.002), dark, SCNVector3(right ? -0.018 : 0.018, 0, 0))   // 滑轨在内侧
+            add(SCNBox(width: 0.004, height: 0.09, length: 0.0125, chamferRadius: 0.002), accent, SCNVector3(right ? -0.0175 : 0.0175, 0, 0))   // 内侧（滑轨那条）上色
             let stickY: CGFloat = right ? -0.016 : 0.024, buttonsY: CGFloat = right ? 0.024 : -0.016
-            add(SCNCylinder(radius: 0.0075, height: 0.006), dark, SCNVector3(0, stickY, 0.009), rotateX: true)
+            let ring = SCNTorus(ringRadius: 0.0085, pipeRadius: 0.0012)   // 摇杆圈上色
+            add(ring, accent, SCNVector3(0, stickY, 0.0072), rotateX: true)
+            add(SCNCylinder(radius: 0.0068, height: 0.006), dark, SCNVector3(0, stickY, 0.009), rotateX: true)
             for (dx, dy) in [(0.0, 0.0065), (0.0, -0.0065), (0.0065, 0.0), (-0.0065, 0.0)] {
-                add(SCNCylinder(radius: 0.0026, height: 0.003), dark, SCNVector3(CGFloat(dx), buttonsY + CGFloat(dy), 0.0075), rotateX: true)
+                add(SCNCylinder(radius: 0.0026, height: 0.003), button, SCNVector3(CGFloat(dx), buttonsY + CGFloat(dy), 0.0075), rotateX: true)
             }
             add(SCNBox(width: 0.02, height: 0.004, length: 0.006, chamferRadius: 0.002), dark, SCNVector3(0, 0.049, 0))   // 顶端肩键
         case .wholePad:

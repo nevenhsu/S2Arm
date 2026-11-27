@@ -153,7 +153,7 @@ struct ControllerTestStep: Equatable {
         if ControllerColorSimulator.allowed { merged.formUnion(sim.ns2MergedGroups) }
         let lang = (Lang.find(UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .device()).code
         let relayMeta = SimText.pick("連接程式", "连接程序", "Connection helper"), simMeta = SimText.pick("模擬", "模拟", "Simulated")
-        func tint(_ id: String, left: Bool) -> ControllerTint? { sim.ns2Tint(id) ?? ControllerTint(body: left ? 0x7ad3f0 : 0xf2a7c3) }
+        func tint(_ id: String, left: Bool) -> ControllerTint? { sim.ns2Tint(id) ?? ControllerTint(body: left ? 0x41b8e8 : 0xef5a5a) }
         var out: [Target] = []
         let devices = controller.allDevices
         var groups: [Int] = []

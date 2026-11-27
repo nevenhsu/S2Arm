@@ -58,13 +58,18 @@ struct ControllerTestFlow {
         // 把手握法：两只横拿当左右把手（左只 ZL 在右、右只 ZR 在左，摇杆朝下），像转把手一样一起左右转，右手那只往自己方向转是加油门
         Step(id: "4-handlebar", hant: "兩手各橫拿一只當把手：左只 ZL 在右、右只 ZR 在左，搖桿都朝下", hans: "两手各横拿一只当把手：左只 ZL 在右、右只 ZR 在左，摇杆都朝下",
              en: "Hold one sideways in each hand like handlebars: left one's ZL end on the right, right one's ZR end on the left, sticks facing down", who: .pair, target: .hold(.handlebar)),
-        Step(id: "5-steer-left", hant: "像轉把手一樣，兩只一起往左轉 30°", hans: "像转把手一样，两只一起往左转 30°", en: "Turn both 30° left, like steering handlebars",
-             who: .pair, target: .rotate(.worldUp, degrees: 30, from: "4-handlebar")),
-        Step(id: "6-steer-right", hant: "兩只一起往右轉 30°（從正前方算）", hans: "两只一起往右转 30°（从正前方算）", en: "Turn both 30° right (from straight ahead)",
-             who: .pair, target: .rotate(.worldUp, degrees: -30, from: "4-handlebar")),
-        Step(id: "7-twist", hant: "回正前方，右手那只往自己的方向轉 45°（像轉油門），左手那只不動", hans: "回正前方，右手那只往自己的方向转 45°（像转油门），左手那只不动",
-             en: "Back to straight ahead, then twist the right one 45° toward you (like a throttle); keep the left one still",
-             who: .pair, target: .rotate(.bodyLong, degrees: -45, from: "4-handlebar", only: "R")),   // 右只顶端朝左：绕 +Y 转 −45° = 握把上缘往人这边转
+        // 把手往左下 / 右下倾：绕人的前方转（把手的滑轨朝前，同拳击握法用的 faceForward 轴）
+        Step(id: "5-tilt-right", hant: "兩只一起往右下傾斜 30°（右邊往下）", hans: "两只一起往右下倾斜 30°（右边往下）", en: "Tilt both 30° down to the right (right side down)",
+             who: .pair, target: .rotate(.faceForward, degrees: 30, from: "4-handlebar")),
+        Step(id: "6-tilt-left", hant: "兩只一起往左下傾斜 30°（左邊往下，從水平算）", hans: "两只一起往左下倾斜 30°（左边往下，从水平算）", en: "Tilt both 30° down to the left (left side down, from level)",
+             who: .pair, target: .rotate(.faceForward, degrees: -30, from: "4-handlebar")),
+        // 转握把（像转油门）：握把上缘往自己这边转；左右只顶端一个朝右一个朝左、绕远端方向转的角度同号
+        Step(id: "7-twist-right", hant: "回到水平，右手那只往自己的方向轉 45°（像轉油門），左手那只不動", hans: "回到水平，右手那只往自己的方向转 45°（像转油门），左手那只不动",
+             en: "Back to level, then twist the right one 45° toward you (like a throttle); keep the left one still",
+             who: .pair, target: .rotate(.bodyLong, degrees: -45, from: "4-handlebar", only: "R")),
+        Step(id: "8-twist-left", hant: "右手那只轉回來，換左手那只往自己的方向轉 45°", hans: "右手那只转回来，换左手那只往自己的方向转 45°",
+             en: "Twist the right one back, then twist the left one 45° toward you",
+             who: .pair, target: .rotate(.bodyLong, degrees: -45, from: "4-handlebar", only: "L")),
     ])
     static let builtIn = [joyConSingle, joyConPair]
 
