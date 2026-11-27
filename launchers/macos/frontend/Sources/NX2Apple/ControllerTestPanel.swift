@@ -391,7 +391,11 @@ struct PoseView: NSViewRepresentable {
         view.antialiasingMode = .multisampling4X
         view.autoenablesDefaultLighting = true
         view.delegate = context.coordinator
-        view.allowsCameraControl = true   // 拖动转视角、捏合缩放；双击回到原视角
+        view.allowsCameraControl = true
+        // 转盘式：左右绕竖轴转、上下俯仰，不会把画面转歪（缺省的自由旋转会滚动地平线）；不要惯性（放手后还在转，回正也被它带走）
+        view.defaultCameraController.interactionMode = .orbitTurntable
+        view.defaultCameraController.worldUp = SCNVector3(0, 1, 0)
+        view.defaultCameraController.inertiaEnabled = false   // 拖动转视角、捏合缩放；双击回到原视角
         c.world.eulerAngles.x = -.pi / 2
         c.scene.rootNode.addChildNode(c.world)
         c.world.addChildNode(c.device)
@@ -423,11 +427,16 @@ struct PoseView: NSViewRepresentable {
     /// 缺省 / 回正的视角：屏幕前的人那边正前方、稍高处，看着原点（11-27 使用者定）
     static let cameraHome = SCNVector3(0, 0.09, 0.24)
     static func placeCamera(_ camera: SCNNode, in view: SCNView) {
+        let controller = view.defaultCameraController
+        controller.stopInertia()
+        camera.removeAllActions()
         camera.position = cameraHome
-        camera.look(at: SCNVector3(0, 0, 0))
-        view.pointOfView = camera
-        view.defaultCameraController.pointOfView = camera
-        view.defaultCameraController.target = SCNVector3(0, 0, 0)
+        camera.look(at: SCNVector3(0, 0, 0), up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))   // 不带滚转
+        view.pointOfView = camera   // 拖过之后 SCNView 可能换成自己的镜头，换回来
+        controller.pointOfView = camera
+        controller.target = SCNVector3(0, 0, 0)
+        controller.worldUp = SCNVector3(0, 1, 0)
+        controller.clearRoll()
     }
     func updateNSView(_ view: SCNView, context: Context) {
         let c = context.coordinator

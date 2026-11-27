@@ -279,4 +279,24 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertTrue(ControllerColorSimulator.isAllowed(preference: true, info: [:]))
         XCTAssertEqual(ControllerTestHub.allowed, ControllerColorSimulator.allowed)
     }
+
+    /// 视角回正：转过（含会滚动地平线的拖法）之后回正，镜头回到缺省位置与朝向、没有滚转（11-27 实机：回正后画面歪着）
+    @MainActor func testViewResetAfterOrbit() {
+        let view = SCNView(frame: NSRect(x: 0, y: 0, width: 200, height: 150))
+        let scene = SCNScene(); view.scene = scene
+        let camera = SCNNode(); camera.camera = SCNCamera(); scene.rootNode.addChildNode(camera)
+        view.allowsCameraControl = true
+        view.defaultCameraController.interactionMode = .orbitTurntable
+        view.defaultCameraController.inertiaEnabled = false
+        PoseView.placeCamera(camera, in: view)
+        let home = (view.pointOfView!.simdWorldPosition, view.pointOfView!.simdWorldOrientation)
+        view.defaultCameraController.rotateBy(x: 60, y: 35)
+        view.defaultCameraController.roll(by: 0.4, aroundScreenPoint: CGPoint(x: 100, y: 75), viewport: CGSize(width: 200, height: 150))
+        XCTAssertGreaterThan(simd_distance(view.pointOfView!.simdWorldPosition, home.0), 0.01, "转过之后镜头应该动了")
+        PoseView.placeCamera(camera, in: view)
+        XCTAssertLessThan(simd_distance(view.pointOfView!.simdWorldPosition, home.0), 1e-4)
+        XCTAssertLessThan(abs(abs(simd_dot(view.pointOfView!.simdWorldOrientation.vector, home.1.vector)) - 1), 1e-4)
+        // 没有滚转：镜头的右方向是水平的
+        XCTAssertLessThan(abs(view.pointOfView!.simdWorldRight.y), 1e-4)
+    }
 }
