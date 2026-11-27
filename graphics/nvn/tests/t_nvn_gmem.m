@@ -201,6 +201,32 @@ int main(void) { @autoreleasepool {
     }
     VERIFY(gmem_decide(NULL) == 1 && gmem_decide("1") == 1 && gmem_decide("") == 1 && gmem_decide("0") == 0,
            "⑦ 开不开（iOS 与 Mac 同一判法）：不设 %d（期望 1）、设 1 %d（期望 1）、设空 %d（期望 1）、设 0 %d（期望 0）", gmem_decide(NULL), gmem_decide("1"), gmem_decide(""), gmem_decide("0"));
+    {   // ⑫ 过滤代数（g_gmem_pgen）与环复用（GMEM_RECYCLE / busy 保护）：
+        //   ① 未取过地址范围的池建池 + 无变化 pool_age() 不改 g_gmem_pgen、gmem_map 返回同一缓冲；
+        //   ② 槽 busy > 0 时跳过复用，空闲且 fence <= g_done 后回到原槽、不新建缓冲
+        id<MTLBuffer> b0 = gmem_map(); int s0 = g_gmem_cur_slot; uint64_t pg0 = atomic_load(&g_gmem_pgen);
+        pool_box D; make_pool(&D, 0xd0000000u);
+        uint64_t pg1 = atomic_load(&g_gmem_pgen);
+        id<MTLBuffer> b_same1 = gmem_map();
+        pthread_mutex_lock(&g_mu); g_present_n += GAGE_CHECK + 1; uint64_t pgen0 = atomic_load(&g_pool_gen); pool_age(); uint64_t pgen1 = atomic_load(&g_pool_gen); pthread_mutex_unlock(&g_mu);
+        uint64_t pg2 = atomic_load(&g_gmem_pgen);
+        id<MTLBuffer> b_same2 = gmem_map();
+        VERIFY(pg1 == pg0 && b_same1 == b0 && pgen1 > pgen0 && pg2 == pg0 && b_same2 == b0,
+               "⑫-1 未取址池与空 pool_age 不触发 gmem_map 重建（pgen %llu→%llu, pool_gen %llu→%llu, 同缓冲 %d/%d）",
+               (unsigned long long)pg0, (unsigned long long)pg2, (unsigned long long)pgen0, (unsigned long long)pgen1, b_same1 == b0, b_same2 == b0);
+        REQUIRE(s0 >= 0);
+        atomic_fetch_add(&g_gmem_rec[s0].busy, 1);
+        atomic_fetch_add(&g_gmem_pgen, 1);
+        id<MTLBuffer> b1 = gmem_map(); int s1 = g_gmem_cur_slot;
+        atomic_fetch_add(&g_gmem_pgen, 1);
+        id<MTLBuffer> b2 = gmem_map();
+        atomic_fetch_sub(&g_gmem_rec[s0].busy, 1);
+        g_gmem_rec[s0].fence = g_done;
+        atomic_fetch_add(&g_gmem_pgen, 1);
+        id<MTLBuffer> b3 = gmem_map(); int s3 = g_gmem_cur_slot;
+        VERIFY(b1 != b0 && s1 != s0 && b2 != b0 && b2 != b1 && b3 == b0 && s3 == s0,
+               "⑫-2 环复用尊重 busy/fence 并在空闲后原槽复用（s0=%d, s1=%d, s3=%d, b3==b0:%d）", s0, s1, s3, b3 == b0);
+    }
     {   // ⑦ 开关关（DM_NVN_GMEM=0）：表重建成 0 项、不为表加常驻；按 A 的窗口地址读查不到（0xdeadbeef），与没有池表时一样
         g_gmem_on = 0; atomic_fetch_add(&g_pool_gen, 1); run(cs, (uint8_t *)io); int res0 = g_pool_res_n;   // 先跑一次：放掉第 1000 帧移出、等着的 B
         io[0] = (io_t){gA + 0x10, 0, 0}; atomic_fetch_add(&g_pool_gen, 1); run(cs, (uint8_t *)io);

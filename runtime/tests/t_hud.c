@@ -20,6 +20,8 @@ uint64_t s2a_gpu_alloc_bytes(void) { return g_gpu_alloc; }
 double s2a_gpu_busy_rate(const s2a_esnap *a, const s2a_esnap *b) { (void)a; (void)b; return -1; }   // 桩：上面采样恒失败，走不到这里
 int nvn_gl_game_fps(void) { return g_gl; }   // 浮层按名字取（dlsym），这里给强定义当 GL 前端
 int nvn_game_fps(void) { return g_nv; }
+static int g_dir_w, g_dir_h;
+void s2a_direct_out_size(int *w, int *h) { if (w) *w = g_dir_w; if (h) *h = g_dir_h; }
 // 固定内存采样结果，验证成功和失败都不会因 Metal HUD 请求被隐藏。
 static int g_mem_ok = 1;
 kern_return_t task_info(task_name_t task, task_flavor_t flavor, task_info_t info, mach_msg_type_number_t *count) {
@@ -109,6 +111,19 @@ int main(void) {
         // 只看帧率（#2207）：同一帧环，期望「屏上 25 帧（游戏 1）」且不带内存（没有「GB」、没有「·」）
         int s2a_hud_brief_fps(char *, size_t); s2a_hud_brief_fps(b, sizeof b); ok = !strcmp(b, "屏上 25 帧（游戏 1）");
         printf("只看帧率（补帧）：期望「屏上 25 帧（游戏 1）」→ %s\n", b); if (!ok) fails++;
+    }
+    {   // 直连出图尺寸（nvn_be_present_out_size → s2a_direct_out_size）：0x0 未取得，1920x1080 掌机 / 2048x1152 主机如实显示
+        char t[4096]; s2a_hud_host hh = {.thermal = "单测", .build_id = "t_hud", .battery_rate_pm = NAN, .battery_level = -1};
+        g_mode = S2A_GFX_DIRECT;
+        g_dir_w = 0; g_dir_h = 0; s2a_hud_text(t, sizeof t, &hh);
+        int ok0 = strstr(t, "画幅 未取得出图尺寸") != NULL;
+        printf("直连出图 0x0：期望含「画幅 未取得出图尺寸」→ %s\n", ok0 ? "是" : "否"); if (!ok0) fails++;
+        g_dir_w = 1920; g_dir_h = 1080; s2a_hud_text(t, sizeof t, &hh);
+        int ok1 = strstr(t, "画幅 1.778（1920x1080）") != NULL;
+        printf("直连出图 1920x1080：期望含「画幅 1.778（1920x1080）」→ %s\n", ok1 ? "是" : "否"); if (!ok1) fails++;
+        g_dir_w = 2048; g_dir_h = 1152; s2a_hud_text(t, sizeof t, &hh);
+        int ok2 = strstr(t, "画幅 1.778（2048x1152）") != NULL;
+        printf("直连出图 2048x1152：期望含「画幅 1.778（2048x1152）」→ %s\n", ok2 ? "是" : "否"); if (!ok2) fails++;
     }
     if (fails) printf("✗ t_hud：%d 项不符\n", fails); else printf("✓ t_hud：浮层目标 = min(游戏帧率, 上限)，GL 不锁时 = 上限，非法上限不进浮层，全过\n");
     return fails != 0;

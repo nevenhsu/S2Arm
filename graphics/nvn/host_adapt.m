@@ -179,8 +179,8 @@ const char *s2a_app_version(void) {   // dsh_miss.inc 着色器覆盖计数的 "
 // 按游戏出图的宽高比居中放进根视图：出的是宽图就按 s2a_screen_w():1080，否则 16:9。宽图两种来源：宽屏第二层开着（游戏自己出 屏幕宽 × 1080 的宽图），
 //   或直连第三层整套放宽（缺省开、S2A_WIDEN_DIRECT=0 关，且这一档位有整套放宽表 widen_full：核心把目标放宽到屏幕宽、上屏按放宽裁切；10-25 数码宝贝 GL 第三层开着，
 //   出图层仍按第二层判成 16:9 挂，放宽的画面又被塞回 16:9）。Mac 宿主无窗口：返回 NULL，直连层按无窗口只计数
-static _Atomic int g_out_w, g_out_h;   // 出图层像素宽高：开发浮层「满屏 出图」读（runtime/src/hud.c 经 dlsym）
-void s2a_direct_out_size(int *w, int *h) { *w = g_out_w; *h = g_out_h; }
+void nvn_be_present_out_size(int *w, int *h);   // graphics/nvn/gfx/nvn/nvn_mtl.m：最近一次上屏的源裁切像素宽高（同 gal_present.m nxgal_out_size）
+void s2a_direct_out_size(int *w, int *h) { nvn_be_present_out_size(w, h); }
 // 出图层只当帧缓冲（framebufferOnly = YES，同小菠萝 front_ios.m 的缺省）：上屏只用渲染遍画进图层贴图（nvn_mtl.m present_encode / present_encode_m4），
 // 截图走游戏自己的源图（grab_present），都不读图层贴图；只当帧缓冲时驱动可以用更省的存储与压缩，少一次整屏读写（10-26 暗黑2 能耗对照小菠萝）。
 // 要回读图层贴图的诊断才设 DM_NVN_FB_READBACK=1（关掉这项优化）
@@ -273,7 +273,6 @@ static void layout_layer(UIView *v, CAMetalLayer *l) {
         if (k != 1.0) LOG("直连：出图层可画尺寸按 %.2f 倍（S2A_OUT_SCALE），交系统合成器放大", k); }
     l.drawableSize = CGSizeMake(floor(w * s * k), floor(h * s * k));
     [CATransaction commit];
-    g_out_w = (int)l.drawableSize.width; g_out_h = (int)l.drawableSize.height;
 }
 static int g_relayout_due;   // 主线程：后台期间出图层挪回了根视图，欠一次重摆（回前台补，见 front_metal_layer 登记的通知）
 void s2a_direct_relayout(void) {   // App 壳视图控制器 viewDidLayoutSubviews、外接屏接上 / 断开（ios/extdisplay.m）调（主线程）；没挂出图层（通用模式 / 还没起）不做
@@ -405,7 +404,6 @@ void *front_metal_layer(void) {
         os_unfair_lock_lock(&mu);
         if ((__bridge void *)l != atomic_load_explicit(&set_id, memory_order_relaxed)) {
             l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm; l.framebufferOnly = !fb_readback(); set = l;
-            g_out_w = (int)l.drawableSize.width; g_out_h = (int)l.drawableSize.height;
             atomic_store_explicit(&set_id, (__bridge void *)l, memory_order_release);
             LOG("直连：出图层取 Mac 游戏窗口的层 %.0fx%.0f 像素", l.drawableSize.width, l.drawableSize.height);
             s2a_hdr_layer_apply();   // PR4：取用即按快照层态应用配置（§4 PR4 ①——创建点；预挂过的 Switch 2 游戏直接 PQ，否则显式 sRGB tag 的 S0）。

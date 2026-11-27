@@ -126,10 +126,10 @@ static id<MTLTexture> tensor_sq_tex(NSUInteger w, NSUInteger h) {
 static const char k_tensor_sq_msl[] =
 "#include <metal_stdlib>\nusing namespace metal;\n"
 "kernel void tensor_sq(texture2d<float, access::read> s [[texture(0)]], texture2d<float, access::write> d [[texture(1)]], uint2 p [[thread_position_in_grid]]) {\n"
-"  if (p.x >= d.get_width() || p.y >= d.get_height()) return;\n"
+"  if (p.x >= s.get_width() || p.y >= s.get_height() || p.x >= d.get_width() || p.y >= d.get_height()) return;\n"
 "  float4 v = s.read(p); d.write(float4(v.rgb * abs(v.rgb), v.a), p); }\n"
 "kernel void tensor_srgb(texture2d<float, access::read> s [[texture(0)]], texture2d<float, access::write> d [[texture(1)]], uint2 p [[thread_position_in_grid]]) {\n"
-"  if (p.x >= d.get_width() || p.y >= d.get_height()) return;\n"
+"  if (p.x >= s.get_width() || p.y >= s.get_height() || p.x >= d.get_width() || p.y >= d.get_height()) return;\n"
 "  float4 v = s.read(p); float3 c = select(pow((max(v.rgb, 0.04045f) + 0.055f) / 1.055f, 2.4f), v.rgb / 12.92f, v.rgb <= 0.04045f); d.write(float4(c, v.a), p); }\n";
 // S2Arm #674: k_tensor_sq_msl is compiled from source as well; built at the first stand-in it held the submit thread 74-118 ms in the first 3D scene when the system's compile
 //   cache missed. On Switch 2 with the stand-in on, mtl_init starts the build in the background (tensor_sq_prewarm); the first pass waits for it (tensor_sq_ready), as ixc_prewarm / ixc_ready
@@ -153,7 +153,8 @@ static int tensor_sq_pass(id<MTLTexture> s, id<MTLTexture> d, int dom) {
         at = ps[0] && ps[1] ? rec_table(tab_new(1, 2, 0, &e)) : nil;
         if (!at) { failed = 1; MLOG("【红】 张量核网络顶替：平方 / sRGB 解码计算核建不出（%s），要换输出域的出口层输出图不写", e.localizedDescription.UTF8String); return 0; } }
     id ce = enc_c_begin(NULL); enc_c_table(ce, at); tab_tex(at, s, 0); tab_tex(at, d, 1); [ce setComputePipelineState:ps[dom == 2]];
-    enc_c_dispatch(ce, MTLSizeMake((d.width + 15) / 16, (d.height + 15) / 16, 1), MTLSizeMake(16, 16, 1));
+    NSUInteger gw = MIN(s.width, d.width), gh = MIN(s.height, d.height);
+    enc_c_dispatch(ce, MTLSizeMake((gw + 15) / 16, (gh + 15) / 16, 1), MTLSizeMake(16, 16, 1));
     enc_c_end(ce);
     args_dirty_all();   // the compute table was this pass's: the game's next dispatch binds its own again
     if (dom == 2) g_tensor_srgb_runs++; else g_tensor_sq_runs++;
@@ -162,22 +163,24 @@ static int tensor_sq_pass(id<MTLTexture> s, id<MTLTexture> d, int dom) {
 
 // 输入图尺寸不等于放大器输入容量（= 输出尺寸）时：有效区域 cw x ch 从 src 左上角拷进定尺寸输入图左上角；有效区域变了就把区域外（右条、下条）清零，
 //   免得 MetalFX 在边缘采到上一种尺寸留下的像素（能耗线 11-15）。拷贝在调用方开的拷贝编码器里，调用方关编码器即全屏障。失败回 nil（这一遍不写）
-static id<MTLTexture> tensor_fix_in(id<MTLTexture> src, NSUInteger W, NSUInteger H, NSUInteger cw, NSUInteger ch, MTLTextureUsage u) {
-    if (cw > W || ch > H || !cw || !ch) { RED_ONCE(195, "张量核网络顶替：有效区域 %lux%lu 超出放大器输入容量 %lux%lu，这一遍不写", (unsigned long)cw, (unsigned long)ch, (unsigned long)W, (unsigned long)H); return nil; }
+static int tensor_fix_get(MTLPixelFormat pf, NSUInteger W, NSUInteger H, NSUInteger cw, NSUInteger ch, MTLTextureUsage u, int *need_clear) {
+    if (cw > W || ch > H || !cw || !ch) { RED_ONCE(195, "张量核网络顶替：有效区域 %lux%lu 超出放大器输入容量 %lux%lu，这一遍不写", (unsigned long)cw, (unsigned long)ch, (unsigned long)W, (unsigned long)H); return -1; }
     int k = -1;
-    for (int i = 0; i < 4; i++) { id<MTLTexture> t = g_tensor_fix[i].t; if (t && t.pixelFormat == src.pixelFormat && t.width == W && t.height == H && (t.usage & u) == u) { k = i; break; } }
+    for (int i = 0; i < 4; i++) { id<MTLTexture> t = g_tensor_fix[i].t; if (t && t.pixelFormat == pf && t.width == W && t.height == H && (t.usage & u) == u) { k = i; break; } }
     if (k < 0) {
-        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:W height:H mipmapped:NO];
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:W height:H mipmapped:NO];
         d.usage = u | MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate;
         id<MTLTexture> t = [g_dev newTextureWithDescriptor:d];
-        if (!t) { RED_ONCE(196, "张量核网络顶替：建 %lux%lu 的定尺寸输入图失败，这一遍不写", (unsigned long)W, (unsigned long)H); return nil; }
+        if (!t) { RED_ONCE(196, "张量核网络顶替：建 %lux%lu 的定尺寸输入图失败，这一遍不写", (unsigned long)W, (unsigned long)H); return -1; }
         k = (int)(g_tensor_fix_n++ % 4);
         if (g_tensor_fix[k].t) defer_obj_release(g_tensor_fix[k].t);
         g_tensor_fix[k].t = t; g_tensor_fix[k].cw = g_tensor_fix[k].ch = 0; res_add(t);
     }
+    if (need_clear) *need_clear = g_tensor_fix[k].cw != cw || g_tensor_fix[k].ch != ch;
+    return k;
+}
+static void tensor_fix_clear_border(id e, int k, NSUInteger W, NSUInteger H, NSUInteger cw, NSUInteger ch) {
     id<MTLTexture> fx = g_tensor_fix[k].t;
-    id e = blit();
-    enc_b_copy_texture(e, src, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(cw, ch, 1), fx, 0, 0, MTLOriginMake(0, 0, 0));
     if (g_tensor_fix[k].cw != cw || g_tensor_fix[k].ch != ch) {   // 区域外清零：右条 [cw, W) x [0, ch)，下条 [0, W) x [ch, H)
         size_t bpp = mtl_pf_bytes(fx.pixelFormat), row = (size_t)W * bpp;
         id<MTLBuffer> zb = bpp ? zero_buf(row * H) : nil;
@@ -189,6 +192,15 @@ static id<MTLTexture> tensor_fix_in(id<MTLTexture> src, NSUInteger W, NSUInteger
         }
         g_tensor_fix[k].cw = cw; g_tensor_fix[k].ch = ch;
     }
+}
+static id<MTLTexture> tensor_fix_in(id<MTLTexture> src, NSUInteger W, NSUInteger H, NSUInteger cw, NSUInteger ch, MTLTextureUsage u) {
+    int need_clear = 0;
+    int k = tensor_fix_get(src.pixelFormat, W, H, cw, ch, u, &need_clear);
+    if (k < 0) return nil;
+    id<MTLTexture> fx = g_tensor_fix[k].t;
+    id e = blit();
+    enc_b_copy_texture(e, src, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(cw, ch, 1), fx, 0, 0, MTLOriginMake(0, 0, 0));
+    if (need_clear) tensor_fix_clear_border(e, k, W, H, cw, ch);
     enc_close_blit();
     g_tensor_fix_runs++;
     return fx;
@@ -196,27 +208,28 @@ static id<MTLTexture> tensor_fix_in(id<MTLTexture> src, NSUInteger W, NSUInteger
 // 放大器按（输入格式、输出格式、输出尺寸）一个，输入容量固定等于输出尺寸（网络放大 1–4 倍，输入不会大过输出）；输入图尺寸不等时先拷进定尺寸输入图（tensor_fix_in），
 //   有效区域交 inputContentWidth / Height。原先按输入图尺寸精确缓存 4 个：游戏动态降分辨率时输入尺寸一直变（854x480、763x429、683x384…），放大器跟着反复新建、挤掉旧的；
 //   第三类 GPU 挂死 4/4 份样本（M1 Pro / M2，时之笛）都紧跟在这之后（D-698W / D-KV2T / D-P2RA / D-EA46）
-static NvDlss *tensor_scaler(id<MTLTexture> c, id<MTLTexture> o) {
-    for (int i = 0; i < 4; i++) { NvDlss *f = g_tensor_fx[i]; if (f && f->cf == c.pixelFormat && f->of == o.pixelFormat && f->ow == o.width && f->oh == o.height) return f; }
+static NvDlss *tensor_scaler_for(MTLPixelFormat cf, NSUInteger cw, NSUInteger ch, id<MTLTexture> o) {
+    for (int i = 0; i < 4; i++) { NvDlss *f = g_tensor_fx[i]; if (f && f->cf == cf && f->of == o.pixelFormat && f->ow == o.width && f->oh == o.height) return f; }
     Class scl = dlss_class("MTLFXSpatialScalerDescriptor");
     if (!scl) { RED_ONCE(160, "张量核网络顶替：这台设备没有 MetalFX 空间放大，输出图这一遍不写"); return nil; }
     MTLFXSpatialScalerDescriptor *sd = [scl new]; BOOL m4 = !g_m3; id sc = nil;
-    sd.colorTextureFormat = c.pixelFormat; sd.outputTextureFormat = o.pixelFormat; sd.inputWidth = o.width; sd.inputHeight = o.height; sd.outputWidth = o.width; sd.outputHeight = o.height;
-    BOOL ldr = c.pixelFormat == MTLPixelFormatRGBA8Unorm || c.pixelFormat == MTLPixelFormatBGRA8Unorm || c.pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB || c.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB || c.pixelFormat == MTLPixelFormatRGB10A2Unorm;
+    sd.colorTextureFormat = cf; sd.outputTextureFormat = o.pixelFormat; sd.inputWidth = o.width; sd.inputHeight = o.height; sd.outputWidth = o.width; sd.outputHeight = o.height;
+    BOOL ldr = cf == MTLPixelFormatRGBA8Unorm || cf == MTLPixelFormatBGRA8Unorm || cf == MTLPixelFormatRGBA8Unorm_sRGB || cf == MTLPixelFormatBGRA8Unorm_sRGB || cf == MTLPixelFormatRGB10A2Unorm;
     sd.colorProcessingMode = ldr ? MTLFXSpatialScalerColorProcessingModePerceptual : MTLFXSpatialScalerColorProcessingModeHDR;
     if (m4) { if (@available(macOS 26.0, iOS 26.0, *)) { id comp = present_fx_compiler(); if (comp) sc = [sd newSpatialScalerWithDevice:g_dev compiler:comp]; } }
     else sc = [sd newSpatialScalerWithDevice:g_dev];
-    if (!sc) { RED_ONCE(161, "张量核网络顶替：建 MetalFX 空间放大器失败（%lux%lu 格式 %lu → %lux%lu 格式 %lu），输出图这一遍不写", (unsigned long)c.width, (unsigned long)c.height,
-                        (unsigned long)c.pixelFormat, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)o.pixelFormat); return nil; }
+    if (!sc) { RED_ONCE(161, "张量核网络顶替：建 MetalFX 空间放大器失败（%lux%lu 格式 %lu → %lux%lu 格式 %lu），输出图这一遍不写", (unsigned long)cw, (unsigned long)ch,
+                        (unsigned long)cf, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)o.pixelFormat); return nil; }
     id<MTLFence> fence = m4 ? [g_dev newFence] : g_fence3; [(id<MTLFXSpatialScalerBase>)sc setFence:fence];
     int slot = (int)(g_tensor_up % 4); for (int i = 0; i < 4; i++) if (!g_tensor_fx[i]) { slot = i; break; }
     if (g_tensor_fx[slot]) defer_obj_unref(g_tensor_fx[slot]->scaler);
     NvDlss *f = [NvDlss new]; f->scaler = sc; f->spatial = YES; f->m4 = m4;
-    f->cf = c.pixelFormat; f->of = o.pixelFormat; f->iw = o.width; f->ih = o.height; f->ow = o.width; f->oh = o.height; g_tensor_fx[slot] = f;
+    f->cf = cf; f->of = o.pixelFormat; f->iw = o.width; f->ih = o.height; f->ow = o.width; f->oh = o.height; g_tensor_fx[slot] = f;
     MLOG("张量核网络顶替：MetalFX 空间放大（%s）格式 %lu → %lux%lu 格式 %lu，输入容量 %lux%lu（这一遍输入 %lux%lu，有效区域交 inputContentWidth / Height）", m4 ? "Metal 4" : "Metal 3",
-         (unsigned long)c.pixelFormat, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)o.pixelFormat, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)c.width, (unsigned long)c.height);
+         (unsigned long)cf, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)o.pixelFormat, (unsigned long)o.width, (unsigned long)o.height, (unsigned long)cw, (unsigned long)ch);
     return f;
 }
+static NvDlss *tensor_scaler(id<MTLTexture> c, id<MTLTexture> o) { return tensor_scaler_for(c.pixelFormat, c.width, c.height, o); }
 
 // 写目标用同一份存储的恒等通道视图（同 Ryujinx：存储图像绑恒等通道视图）：按贴图编号取到的是采样用视图，登记带通道重排（R11G11B10F 的 a = 1 等）时
 //   是重排视图，Metal 给它的用途只有 ShaderRead；拿它去 dlss_usage 就缺渲染目标用途，tex_upgrade 新建一张、整张拷贝、换进序号表，下次又在新底图上建重排视图，
@@ -275,8 +288,6 @@ static void tensor_standin(NvShader *cs) {
     id<MTLTexture> crop = icrop ? tensor_in_tex(c.pixelFormat, rio[0], rio[1], MTLTextureUsageShaderRead) : nil;
     if (icrop && !crop) { g_tensor_red++; return; }
     id<MTLTexture> src = crop ? crop : c;   // 换域那一遍读的：输入本身或它的裁块
-    id<MTLTexture> in = dom ? tensor_sq_tex(src.width, src.height) : src;   // what MetalFX reads: the input itself, its crop, or its signed square / sRGB decode (see the file header)
-    if (!in) { g_tensor_red++; return; }
     NSUInteger rc[6] = {c.width, c.height, 0, 0, o.width, o.height};   // 输入内容宽高、输出区域（文件头「有效区域」）
     int rect = io ? (memcpy(rc, rio, sizeof rc), 1) : tensor_rect(cs, tc, c, to, o, rc);
     if (icrop && !(cs->tensor_log & 16)) { cs->tensor_log |= 16; MLOG("张量核网络顶替：%s 输入块从 (%lu,%lu) 起，先拷进 %lux%lu 临时图再放大", cs->key, (unsigned long)rio[6], (unsigned long)rio[7], (unsigned long)rio[0], (unsigned long)rio[1]); }
@@ -285,32 +296,62 @@ static void tensor_standin(NvShader *cs) {
     int part = rc[2] || rc[3] || rc[4] != o.width || rc[5] != o.height;   // 输出只写一块：MetalFX 先写同尺寸临时图
     id<MTLTexture> ot = o;
     if (part && !(ot = tensor_out_tex(o.pixelFormat, rc[4], rc[5], MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget))) { g_tensor_red++; return; }
-    NvDlss *f = tensor_scaler(in, ot);
-    if (!f) { g_tensor_red++; return; }
-    id<MTLFXSpatialScalerBase> ss = f->scaler;
-    if (part && (ot.usage & ss.outputTextureUsage) != ss.outputTextureUsage) { g_tensor_red++; RED_ONCE(165, "张量核网络顶替：MetalFX 要的输出用途 %#lx 临时图没有，输出图这一遍不写", (unsigned long)ss.outputTextureUsage); return; }
-    if (in == c) in = c = dlss_usage(tc, c, ss.colorTextureUsage);
-    else {
+    int fuse_fix = dom && (src.width != ot.width || src.height != ot.height) && rc[0] == src.width && rc[1] == src.height;
+    id<MTLTexture> in = nil; NvDlss *f = nil; id<MTLFXSpatialScalerBase> ss = nil;
+    int fk = -1, need_clear = 0;
+    if (fuse_fix) {
+        f = tensor_scaler_for(MTLPixelFormatRGBA16Float, src.width, src.height, ot);
+        if (!f) { g_tensor_red++; return; }
+        ss = f->scaler;
+        if (part && (ot.usage & ss.outputTextureUsage) != ss.outputTextureUsage) { g_tensor_red++; RED_ONCE(165, "张量核网络顶替：MetalFX 要的输出用途 %#lx 临时图没有，输出图这一遍不写", (unsigned long)ss.outputTextureUsage); return; }
         c = dlss_usage(tc, c, MTLTextureUsageShaderRead);
+        if (!crop) src = c;
+        if (part) o = dlss_usage(to, o, MTLTextureUsageShaderRead);
+        else ot = o = dlss_usage(to, o, ss.outputTextureUsage);
+        fk = tensor_fix_get(MTLPixelFormatRGBA16Float, f->iw, f->ih, rc[0], rc[1], ss.colorTextureUsage | MTLTextureUsageShaderWrite, &need_clear);
+        if (fk < 0) { g_tensor_red++; return; }
+        in = g_tensor_fix[fk].t;
         if ((in.usage & ss.colorTextureUsage) != ss.colorTextureUsage) { g_tensor_red++; RED_ONCE(164, "张量核网络顶替：MetalFX 要的输入用途 %#lx 平方 / 裁块临时图没有，输出图这一遍不写", (unsigned long)ss.colorTextureUsage); return; }
+    } else {
+        in = dom ? tensor_sq_tex(src.width, src.height) : src;   // what MetalFX reads: the input itself, its crop, or its signed square / sRGB decode (see the file header)
+        if (!in) { g_tensor_red++; return; }
+        f = tensor_scaler(in, ot);
+        if (!f) { g_tensor_red++; return; }
+        ss = f->scaler;
+        if (part && (ot.usage & ss.outputTextureUsage) != ss.outputTextureUsage) { g_tensor_red++; RED_ONCE(165, "张量核网络顶替：MetalFX 要的输出用途 %#lx 临时图没有，输出图这一遍不写", (unsigned long)ss.outputTextureUsage); return; }
+        if (in == c) in = c = dlss_usage(tc, c, ss.colorTextureUsage);
+        else {
+            c = dlss_usage(tc, c, MTLTextureUsageShaderRead);
+            if (!crop) src = c;
+            if ((in.usage & ss.colorTextureUsage) != ss.colorTextureUsage) { g_tensor_red++; RED_ONCE(164, "张量核网络顶替：MetalFX 要的输入用途 %#lx 平方 / 裁块临时图没有，输出图这一遍不写", (unsigned long)ss.colorTextureUsage); return; }
+        }
+        if (part) o = dlss_usage(to, o, MTLTextureUsageShaderRead);   // 拷贝目标：拷贝不要额外用途，只保证它已解析
+        else ot = o = dlss_usage(to, o, ss.outputTextureUsage);
     }
-    if (part) o = dlss_usage(to, o, MTLTextureUsageShaderRead);   // 拷贝目标：拷贝不要额外用途，只保证它已解析
-    else ot = o = dlss_usage(to, o, ss.outputTextureUsage);
     zskip_del(to->serial);
     pkg_gpu_wrote(to, 0, 0, 1, 0, 0, (uint32_t)to->d.width, (uint32_t)to->d.height);
     if (g_wd > 0) { pthread_mutex_lock(&g_wd_mu); s2a_widen_gpu_wrote((uint32_t)to->serial, (uint32_t)tc->serial); pthread_mutex_unlock(&g_wd_mu); }
-    rp_flush(); (void)blit(); enc_close_blit();   // 前一侧全屏障（同 dlss_eval）
+    rp_flush();
+    int had_barrier = 0;
     if (crop) {   // 裁块：把输入块拷进临时图左上角，拷贝编码器关了即全屏障，换域那一遍 / MetalFX 读到拷完的临时图
         enc_b_copy_texture(blit(), c, 0, 0, MTLOriginMake(rio[6], rio[7], 0), MTLSizeMake(rio[0], rio[1], 1), crop, 0, 0, MTLOriginMake(0, 0, 0));
-        enc_close_blit();
+        enc_close_blit(); had_barrier = 1;
     }
-    if (dom) {   // 平方 / sRGB 解码这一遍，之后再一个全屏障，MetalFX 读到写完的临时图
+    if (fuse_fix) {
+        if (need_clear) { tensor_fix_clear_border(blit(), fk, f->iw, f->ih, rc[0], rc[1]); enc_close_blit(); }
         if (!tensor_sq_pass(src, in, dom)) { g_tensor_red++; return; }
-        (void)blit(); enc_close_blit();
+        g_tensor_fix_runs++; had_barrier = 1;
+    } else {
+        if (dom) {   // 平方 / sRGB 解码这一遍：enc_c_begin/end 自带前后队列全屏障，MetalFX 直接读到写完的临时图
+            if (!tensor_sq_pass(src, in, dom)) { g_tensor_red++; return; }
+            had_barrier = 1;
+        }
+        if (in.width != f->iw || in.height != f->ih) {   // 输入图不等于放大器输入容量：有效区域拷进定尺寸输入图（tensor_fix_in）
+            if (!(in = tensor_fix_in(in, f->iw, f->ih, rc[0], rc[1], ss.colorTextureUsage))) { g_tensor_red++; return; }
+            had_barrier = 1;
+        }
     }
-    if (in.width != f->iw || in.height != f->ih) {   // 输入图不等于放大器输入容量：有效区域拷进定尺寸输入图（tensor_fix_in）
-        if (!(in = tensor_fix_in(in, f->iw, f->ih, rc[0], rc[1], ss.colorTextureUsage))) { g_tensor_red++; return; }
-    }
+    if (!had_barrier) { (void)blit(); enc_close_blit(); }   // 前一侧全屏障（同 dlss_eval）
     uint64_t a[15] = {0}; a[11] = rc[0]; a[12] = rc[1]; a[13] = 1;   // 输入内容宽高：有效区域（不成立 / 这一族以外 = 整张输入图）
     if (rec_on()) { rec_t *r = rec_put(RO_FX, 5); memcpy(r->a, a, sizeof a); r->a[0] = rec_obj(f->scaler); r->a[1] = rec_obj(in); r->a[2] = rec_obj(nil); r->a[3] = rec_obj(nil); r->a[4] = rec_obj(ot); }
     else { a[0] = (uint64_t)(__bridge void *)f->scaler; a[1] = (uint64_t)(__bridge void *)in; a[4] = (uint64_t)(__bridge void *)ot; dlss_fx_run(g_cb, a); }

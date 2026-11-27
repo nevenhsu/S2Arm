@@ -333,6 +333,379 @@ int main(void) {
               VERIFY(h[8] == 64 && h[9] == 1 && h[10] == 1 && h[13] == 0 && h[14] == 1 && h[18] == 1000000 && h[19] == 0,
                      "⑬ 无任务网格间接 {1000, 1000, 1}、容量 64 → 组 {%u, %u, %u}、索引数 %u、实例 %u、原始 %u、任务 %u", h[8], h[9], h[10], h[13], h[14], h[18], h[19]);
           } }
+        // ⑭ DM_NVN_MESH_PASS_SPLIT=2（M1 / M2 等无原生剔除时按「网格」vs「普通」切换断点）+ 无任务原生网格 count > 1024 分块派发
+        {
+            NvShader *vs14 = [NvShader new]; vs14->stage = 0; strlcpy(vs14->key, "1414141414141414_b", sizeof vs14->key); vs14->ventry = @"main0"; vs14->rf.pos_attr = -1; vs14->load_depth_zero = 1;
+            { NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:
+                @"#include <metal_stdlib>\nusing namespace metal;\n"
+                 "vertex float4 main0(uint vid [[vertex_id]]) { return float4(2.0 + float(vid), 2.0, 0.0, 1.0); }\n" options:nil error:&e];
+              REQUIRE(l); vs14->fn = [l newFunctionWithName:@"main0"]; REQUIRE(vs14->fn); }
+            NvProg *plain14 = [NvProg new]; plain14->sh[0] = vs14; plain14->sh[1] = fs;
+            static prog_t gp_plain14; memset(&gp_plain14, 0, sizeof gp_plain14); gp_plain14.magic = MAGIC('P', 'R', 'O', 'G'); gp_plain14.serial = nvn_new_serial(); serial_put(gp_plain14.serial, plain14);
+
+            int want_split = [g_dev supportsFamily:MTLGPUFamilyApple9] ? 0 : 2;
+            const char *se = getenv("DM_NVN_MESH_PASS_SPLIT");
+            if (!se || !*se) VERIFY(mtk_split_on() == want_split, "⑭ 缺省 DM_NVN_MESH_PASS_SPLIT=%d（期望 %d）", mtk_split_on(), want_split);
+
+            p_draw d14a = {.prim = DM_PRIM_MESH_TASKS, .first = 0, .count = 1, .instances = 1};
+            p_draw d14b = {.prim = DM_PRIM_MESH_TASKS, .first = 2, .count = 1, .instances = 1};
+            p_draw d14p = {.prim = 4, .count = 3, .instances = 1};
+            int w14 = 0;
+            if (!mtk_emu_on() && mtk_split_on() == 2) {
+                frame_begin(); uint64_t rp0 = g_stat_pass; S.prog = &gp[0];
+                mesh_draw(&d14a, &w14); mesh_draw(&d14b, &w14);
+                cols = frame_columns();
+                VERIFY(cols == 0x05 && g_stat_pass == rp0 + 1,
+                       "⑭ 连续两笔直跑网格绘制共用 1 遍：渲染遍 +%llu（期望 1），列掩码 %#x（期望 0x05）", (unsigned long long)(g_stat_pass - rp0), cols);
+
+                frame_begin(); rp0 = g_stat_pass; S.prog = &gp[0]; mesh_draw(&d14a, &w14);
+                S.prog = &gp_plain14; draw(&d14p, NULL);
+                S.prog = &gp[0]; mesh_draw(&d14b, &w14);
+                cols = frame_columns();
+                VERIFY(cols == 0x05 && g_stat_pass == rp0 + 3,
+                       "⑭ 网格 / 普通 / 网格交错在边界切遍：渲染遍 +%llu（期望 3），列掩码 %#x（期望 0x05）", (unsigned long long)(g_stat_pass - rp0), cols);
+
+                frame_begin(); rp0 = g_stat_pass; S.prog = &gp[0]; mesh_draw(&d14a, &w14);
+                R.has_sc = 1; R.sc = (p_scissor){7, 0, 1, 4};
+                clear_color_tri(&(p_clear_color){.index = 0, .mask = 15, .rgba = {0, 0, 0, 1}});
+                R.has_sc = 0;
+                S.prog = &gp[0]; mesh_draw(&d14b, &w14);
+                cols = frame_columns();
+                VERIFY(cols == 0x05 && g_stat_pass == rp0 + 3,
+                       "⑭ 网格后遍内三角清除（clear_color_tri）后接网格在边界切遍：渲染遍 +%llu（期望 3），列掩码 %#x（期望 0x05）", (unsigned long long)(g_stat_pass - rp0), cols);
+            }
+            // 无任务直跑网格 count > 1024（1028 拆成 1024 + 4 两段，起始号分别落在 buffer(29)）：列 0..7 全白，Zero GPU/Metal 校验错误
+            frame_begin(); S.prog = &gp[0];
+            p_draw d14big = {.prim = DM_PRIM_MESH_TASKS, .first = 0, .count = 1028, .instances = 1};
+            mesh_draw(&d14big, &w14);
+            cols = frame_columns();
+            VERIFY(cols == 0xff, "⑭ 无任务直跑网格 count=1028（>1024 分块派发）：列掩码 %#x（期望 0xff）", cols);
+
+            frame_begin(); S.prog = &gp[0];
+            p_draw d14hi = {.prim = DM_PRIM_MESH_TASKS, .first = 1024, .count = 4, .instances = 1};
+            mesh_draw(&d14hi, &w14);
+            cols = frame_columns();
+            VERIFY(cols == 0, "⑭ 无任务直跑网格 first=1024 count=4：提交无报错、列掩码 %#x（期望 0）", cols);
+        }
+
+        // ⑮ 任务 / 网格管线二进制归档（par_mkey + par_mesh → MTLBinaryArchive 落盘并命中；mtk_pso 重用同一份）
+        {
+            pso_key pk15; memset(&pk15, 0, sizeof pk15);
+            pso_key_fill(&pk15, md, fs, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, 0);
+            memset(pk15.attr, 0, sizeof pk15.attr); memset(pk15.stream, 0, sizeof pk15.stream);
+            NSString *k15 = par_mkey(&pk15, nil, md, fs, 0, 0, nil, nil);
+            VERIFY(k15 && [k15 hasPrefix:@"m"], "⑮ par_mkey 产出带前缀的网格管线归档键（%s）", k15 ? k15.UTF8String : "-");
+
+            MTLMeshRenderPipelineDescriptor *d15a = mtk_desc(&pk15, nil, md, fs, nil, 0, nil);
+            NSError *e15 = nil;
+            uint64_t h0 = atomic_load(&g_par_hits), m0 = atomic_load(&g_par_misses), sf0 = atomic_load(&g_par_ser_failed), wf0 = atomic_load(&g_par_write_failed);
+            int had = g_par_have && [g_par_have containsObject:k15];
+            id<MTLRenderPipelineState> ps15a = par_mesh(d15a, k15, &e15);
+            VERIFY(ps15a != nil && (had || atomic_load(&g_par_misses) == m0 + 1), "⑮ par_mesh 首次建管线成功（archive had=%d, misses +%llu）", had, (unsigned long long)(atomic_load(&g_par_misses) - m0));
+            par_write(k15, mtk_desc(&pk15, nil, md, fs, nil, 0, nil));
+            VERIFY(atomic_load(&g_par_ser_failed) == sf0 && atomic_load(&g_par_write_failed) == wf0 && [g_par_have containsObject:k15],
+                   "⑮ addMeshRenderPipelineFunctionsWithDescriptor + serializeToURL 写盘成功（ser_fail=%llu write_fail=%llu）",
+                   (unsigned long long)(atomic_load(&g_par_ser_failed) - sf0), (unsigned long long)(atomic_load(&g_par_write_failed) - wf0));
+
+            MTLMeshRenderPipelineDescriptor *d15b = mtk_desc(&pk15, nil, md, fs, nil, 0, nil);
+            uint64_t h1 = atomic_load(&g_par_hits);
+            id<MTLRenderPipelineState> ps15b = par_mesh(d15b, k15, &e15);
+            VERIFY(ps15b != nil && atomic_load(&g_par_hits) == h1 + 1, "⑮ par_mesh 二次经 MTLBinaryArchive 直接命中（hits +%llu, before_first=%llu）",
+                   (unsigned long long)(atomic_load(&g_par_hits) - h1), (unsigned long long)h0);
+
+            if (ps15b) {
+                mtk_key mk15; memset(&mk15, 0, sizeof mk15); mk15.k = pk15; mk15.ts = NULL;
+                os_unfair_lock_lock(&g_pso_mtk_lock);
+                hm_put_id(&g_pso_mtk, &mk15, ps15b);
+                os_unfair_lock_unlock(&g_pso_mtk_lock);
+                frame_begin(); S.prog = &gp[0]; int w15 = 0;
+                p_draw dw15 = {.prim = DM_PRIM_MESH_TASKS, .first = 4, .count = 2, .instances = 1};
+                mesh_draw(&dw15, &w15);
+                int cols15 = frame_columns();
+                VERIFY(cols15 == 0x30, "⑮ 归档命中的网格管线绘制列 4..5（列掩码 %#x，期望 0x30）", cols15);
+            }
+        }
+
+        // ⑯ 原生网格优化（大阶段内存迁设备暂存 + CAS 字节写直改 + 跨阶段变分打包 + 带 opt_tag 归档命中 + GPU 渲染等价）
+        if (!mtk_emu_on()) {
+            NSString *mSrc16 =
+                @"#include <metal_stdlib>\n"
+                 "using namespace metal;\n"
+                 "template<typename T, uint N> struct spvUnsafeArray { T elements[N ? N : 1];\n"
+                 "    thread T& operator[](size_t pos) thread { return elements[pos]; }\n"
+                 "    const thread T& operator[](size_t pos) const thread { return elements[pos]; }\n"
+                 "    device T& operator[](size_t pos) device { return elements[pos]; }\n"
+                 "    const device T& operator[](size_t pos) const device { return elements[pos]; }\n"
+                 "    threadgroup T& operator[](size_t pos) threadgroup { return elements[pos]; }\n"
+                 "    const threadgroup T& operator[](size_t pos) const threadgroup { return elements[pos]; }\n"
+                 "};\n"
+                 "static inline __attribute__((always_inline)) uint dm_insert_bits(uint base, uint ins, uint off, uint bits) {\n"
+                 "    return insert_bits(base, ins, off, bits);\n"
+                 "}\n"
+                 "void _16(thread const int& _1, thread const int& _2, threadgroup spvUnsafeArray<uint, 2048>& _3)\n"
+                 "{\n"
+                 "    uint _4 = uint(_1) >> uint(2);\n"
+                 "    uint _5 = (uint(_1) & 3u) << 3;\n"
+                 "    uint _6 = _3[_4];\n"
+                 "    uint _7;\n"
+                 "    for (;;) {\n"
+                 "        uint _8 = dm_insert_bits(_6, uint(_2), _5, 8u);\n"
+                 "        bool _9 = atomic_compare_exchange_weak_explicit((threadgroup atomic_uint*)&_3[_4], &_6, _8, memory_order_relaxed, memory_order_relaxed);\n"
+                 "        if (_9) break;\n"
+                 "    }\n"
+                 "}\n"
+                 "struct dm_vertex_t {\n"
+                 "    float4 position [[position]];\n"
+                 "    float4 a0 [[user(locn0)]];\n"
+                 "    float4 a1 [[user(locn1)]];\n"
+                 "    float4 a2 [[user(locn2)]];\n"
+                 "    float4 a3 [[user(locn3)]];\n"
+                 "    float4 a4 [[user(locn4)]];\n"
+                 "    float4 a5 [[user(locn5)]];\n"
+                 "};\n"
+                 "using dm_mesh_t = metal::mesh<dm_vertex_t, void, 4, 2, metal::topology::triangle>;\n"
+                 "[[mesh]] void main0(uint dm_lid [[thread_index_in_threadgroup]], constant uint& dm_first_wg [[buffer(29)]], uint dm_gid [[threadgroup_position_in_grid]], dm_mesh_t dm_out)\n"
+                 "{\n"
+                 "    threadgroup spvUnsafeArray<uint, 2048> s_mem;\n"
+                 "    for (uint i = dm_lid; i < 2048u; i += 32u) s_mem[i] = 0u;\n"
+                 "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                 "    if (dm_lid == 0u) {\n"
+                 "        int o0 = 0, v0 = 0, o1 = 1, v1 = 1, o2 = 2, v2 = 2, o3 = 3, v3 = 2, o4 = 4, v4 = 1, o5 = 5, v5 = 3;\n"
+                 "        _16(o0, v0, s_mem); _16(o1, v1, s_mem); _16(o2, v2, s_mem);\n"
+                 "        _16(o3, v3, s_mem); _16(o4, v4, s_mem); _16(o5, v5, s_mem);\n"
+                 "    }\n"
+                 "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                 "    if (dm_lid == 0u) dm_out.set_primitive_count(2u);\n"
+                 "    if (dm_lid < 4u) {\n"
+                 "        float4 pos = dm_lid == 0u ? float4(-1.0, -1.0, 0.0, 1.0) : dm_lid == 1u ? float4(-0.5, -1.0, 0.0, 1.0) : dm_lid == 2u ? float4(-1.0, 1.0, 0.0, 1.0) : float4(-0.5, 1.0, 0.0, 1.0);\n"
+                 "        dm_vertex_t v = {};\n"
+                 "        v.position = pos;\n"
+                 "        v.a0 = float4(0.25, 0.0, 0.5, 1.0);\n"
+                 "        v.a1 = float4(0.0, 0.25, 1.0, 0.0);\n"
+                 "        v.a2 = float4(0.25, 0.0, 0.0, 1.0);\n"
+                 "        v.a3 = float4(0.0, 0.0, 0.0, 0.0);\n"
+                 "        v.a5 = float4(0.0, 0.5, 0.0, 1.0);\n"
+                 "        uint n = dm_lid;\n"
+                 "        dm_out.set_vertex(n, v);\n"
+                 "    }\n"
+                 "    if (dm_lid < 6u) {\n"
+                 "        uint w = s_mem[dm_lid >> 2];\n"
+                 "        uint idx = (w >> ((dm_lid & 3u) * 8u)) & 0xffu;\n"
+                 "        dm_out.set_index(dm_lid, idx);\n"
+                 "    }\n"
+                 "}\n"
+                 "\n#ifdef S2A_MESH_EMU\n"
+                 "kernel void main0_mc(uint dm_lid [[thread_index_in_threadgroup]], device uint* dm_xo [[buffer(28)]])\n"
+                 "{\n"
+                 "    if (dm_lid == 0u) dm_xo[0] = 0u;\n"
+                 "}\n"
+                 "#endif\n";
+            NSString *fSrc16 =
+                @"#include <metal_stdlib>\n"
+                 "using namespace metal;\n"
+                 "struct main0_out_u { uint4 c0 [[color(0)]]; };\n"
+                 "struct main0_in\n"
+                 "{\n"
+                 "    float4 a0 [[user(locn0)]];\n"
+                 "    float4 a1 [[user(locn1)]];\n"
+                 "    float4 a2 [[user(locn2), flat]];\n"
+                 "    float4 a3 [[user(locn3)]];\n"
+                 "    float4 a4 [[user(locn4)]];\n"
+                 "    float4 a5 [[user(locn5)]];\n"
+                 "};\n"
+                 "fragment float4 main0(main0_in in [[stage_in]])\n"
+                 "{\n"
+                 "    float s = in.a0.x + in.a0.y + in.a0.z + in.a0.w + in.a1.x + in.a1.y + in.a1.z + in.a1.w +\n"
+                 "              in.a2.x + in.a2.w + in.a3.x + in.a3.w + in.a4.y + in.a4.z + in.a5.y + in.a5.w;\n"
+                 "    return fabs(s - 5.75) < 0.01 ? float4(1.0) : float4(1.0, 0.0, 0.0, 1.0);\n"
+                 "}\n"
+                 "[[early_fragment_tests]] fragment main0_out_u main0_u(main0_in in [[stage_in]])\n"
+                 "{\n"
+                 "    return main0_out_u{uint4(1)};\n"
+                 "}\n";
+
+            int dev16 = 0, bstore16 = 0;
+            NSString *mOpt16 = mtk_opt_mesh_src(mSrc16, &dev16, &bstore16);
+            VERIFY(dev16 == 1 && bstore16 == 1 && mOpt16 &&
+                   [mOpt16 containsString:@"device uint* dm_scratch [[buffer(28)]]"] &&
+                   [mOpt16 containsString:@"reinterpret_cast<device uchar*>"],
+                   "⑯ mtk_opt_mesh_src 迁移阶段内存至设备暂存并改写字节写（dev=%d bstore=%d）", dev16, bstore16);
+            REQUIRE(mOpt16);
+
+            NSString *mPack16 = nil, *fPack16 = nil, *layout16 = nil;
+            unsigned orig16 = 0, new16 = 0;
+            int pak16 = mtk_pack_pair_src(mOpt16, fSrc16, &mPack16, &fPack16, &layout16, &orig16, &new16);
+            VERIFY(pak16 && orig16 == 6 && new16 <= 4 && mPack16 && fPack16,
+                   "⑯ mtk_pack_pair_src 跨阶段变分打包压缩槽位（ok=%d %u->%u layout=%s）", pak16, orig16, new16, layout16 ? layout16.UTF8String : "-");
+            REQUIRE(pak16);
+
+            NSError *e16 = nil;
+            id<MTLLibrary> mLibOrig = [g_dev newLibraryWithSource:mSrc16 options:dm_msl_opts() error:&e16]; REQUIRE(mLibOrig);
+            id<MTLLibrary> fLibOrig = [g_dev newLibraryWithSource:fSrc16 options:dm_msl_opts() error:&e16]; REQUIRE(fLibOrig);
+            id<MTLLibrary> mLibOpt  = [g_dev newLibraryWithSource:mPack16 options:dm_msl_opts() error:&e16]; REQUIRE(mLibOpt);
+            id<MTLLibrary> fLibOpt  = [g_dev newLibraryWithSource:fPack16 options:dm_msl_opts() error:&e16]; REQUIRE(fLibOpt);
+
+            NvShader *m16 = [NvShader new]; m16->stage = 4; m16->mesh_kind = 2; m16->mesh_threads = 32; m16->mesh_maxv = 4; m16->mesh_maxp = 2; m16->load_depth_zero = 1;
+            strlcpy(m16->key, "aaaaaaaaaaaaaaaa_b", sizeof m16->key); m16->ventry = @"main0"; m16->fn = lib_entry(mLibOrig, @"main0"); REQUIRE(m16->fn);
+            NvShader *f16 = [NvShader new]; f16->stage = 1; strlcpy(f16->key, "bbbbbbbbbbbbbbbb_b", sizeof f16->key); f16->ventry = @"main0";
+            f16->fn = lib_entry(fLibOrig, @"main0"); REQUIRE(f16->fn);
+
+            NvProg *prog16 = [NvProg new]; prog16->sh[1] = f16; prog16->sh[4] = m16;
+            static prog_t gp16; memset(&gp16, 0, sizeof gp16); gp16.magic = MAGIC('P', 'R', 'O', 'G'); gp16.serial = nvn_new_serial(); serial_put(gp16.serial, prog16);
+
+            pso_key pk16; memset(&pk16, 0, sizeof pk16);
+            pso_key_fill(&pk16, m16, f16, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, 0);
+            memset(pk16.attr, 0, sizeof pk16.attr); memset(pk16.stream, 0, sizeof pk16.stream);
+
+            MTLMeshRenderPipelineDescriptor *d16orig = mtk_desc(&pk16, nil, m16, f16, nil, 0, nil);
+            id<MTLRenderPipelineState> ps16orig = [g_dev newRenderPipelineStateWithMeshDescriptor:d16orig options:MTLPipelineOptionNone reflection:nil error:&e16];
+            REQUIRE(ps16orig);
+
+            MTLMeshRenderPipelineDescriptor *d16opt = mtk_desc(&pk16, nil, m16, f16, nil, 0, nil);
+            d16opt.meshFunction = lib_entry(mLibOpt, @"main0"); REQUIRE(d16opt.meshFunction);
+            d16opt.fragmentFunction = lib_entry(fLibOpt, @"main0"); REQUIRE(d16opt.fragmentFunction);
+            (void)mtk_scratch_gpu();
+
+            NSString *optTag16 = [NSString stringWithFormat:@"%s|%s|d%db%dp|%@", m16->key, f16->key, dev16, bstore16, layout16];
+            NSString *k16orig = par_mkey(&pk16, nil, m16, f16, 0, 0, nil, nil);
+            NSString *k16opt  = par_mkey(&pk16, nil, m16, f16, 0, 0, nil, optTag16);
+            VERIFY(k16opt && ![k16opt isEqualToString:k16orig], "⑯ par_mkey 带 opt_tag 产出独立归档键");
+
+            id<MTLRenderPipelineState> ps16optA = par_mesh(d16opt, k16opt, &e16);
+            REQUIRE(ps16optA);
+            par_write(k16opt, d16opt);
+            uint64_t h16 = atomic_load(&g_par_hits);
+            id<MTLRenderPipelineState> ps16optB = par_mesh(d16opt, k16opt, &e16);
+            VERIFY(ps16optB != nil && atomic_load(&g_par_hits) == h16 + 1, "⑯ par_mesh + par_write 优化管线二次命中归档（hits +%llu）", (unsigned long long)(atomic_load(&g_par_hits) - h16));
+            REQUIRE(ps16optB);
+
+            mtk_key mk16; memset(&mk16, 0, sizeof mk16); mk16.k = pk16;
+            p_draw dw16 = {.prim = DM_PRIM_MESH_TASKS, .first = 0, .count = 1, .instances = 1};
+            os_unfair_lock_lock(&g_pso_mtk_lock); hm_put_id(&g_pso_mtk, &mk16, ps16orig); os_unfair_lock_unlock(&g_pso_mtk_lock);
+            frame_begin(); S.prog = &gp16; int w16 = 0; mesh_draw(&dw16, &w16);
+            int colsOrig = frame_columns();
+
+            os_unfair_lock_lock(&g_pso_mtk_lock); hm_put_id(&g_pso_mtk, &mk16, ps16optB); os_unfair_lock_unlock(&g_pso_mtk_lock);
+            frame_begin(); S.prog = &gp16; mesh_draw(&dw16, &w16);
+            int colsOpt = frame_columns();
+            VERIFY(colsOrig == 0x03 && colsOpt == colsOrig, "⑯ 优化+打包后网格管线真实 GPU 渲染与原版等价（orig=%#x opt=%#x，期望 0x03）", colsOrig, colsOpt);
+
+            const uint32_t *shdr = g_mtk_scratch ? (const uint32_t *)g_mtk_scratch.contents : NULL;
+            uint32_t forced16 = shdr ? shdr[MTK_SCRATCH_FORCED] : 999u;
+            uint32_t busySlots16 = 0;
+            if (shdr) for (uint32_t s = 0; s < g_mtk_scratch_slots; s++) if (shdr[MTK_SCRATCH_FLAGS + s]) busySlots16++;
+            VERIFY(shdr && forced16 == 0 && busySlots16 == 0, "⑯ 设备暂存槽全数正常归还且无强制占用（forced=%u busy=%u）", forced16, busySlots16);
+        }
+        // ⑰ 间接任务/网格绘制开着渲染遍，且绑定阶段因短 UBO GPU 写触发 cbuf_pad_alloc(gpu_src=1) -> blit() -> rp_end()：
+        //   必须在 g_enc != en 重试检查前绑定任务/网格参数（否则往已被关掉的渲染编码器发 RO_R_MESH_IND 崩在 dm-encode），
+        //   且 g_cb_pad 对已由 GPU 拷入暂存的条目跳过 !gw_live 拒缓存（否则重试遍再次 blit()->rp_end() 命中 RED_ONCE(136)）
+        if (!mtk_emu_on()) {
+            NSString *mSrc17 =
+                @"#include <metal_stdlib>\n"
+                 "using namespace metal;\n"
+                 "struct Ubo17 { float4 v[16]; };\n"
+                 "struct Args17 { constant Ubo17 *c0 [[id(0)]]; };\n"
+                 "struct V17 { float4 p [[position]]; };\n"
+                 "using M17 = mesh<V17, void, 4, 2, topology::triangle>;\n"
+                 "[[mesh]] void main0(M17 dm_out, uint dm_lid [[thread_index_in_threadgroup]], uint dm_gid [[threadgroup_position_in_grid]], constant uint *dm_first [[buffer(29)]], constant Args17 &args [[buffer(0)]]) {\n"
+                 "    float ok0 = (*args.c0).v[0].x;\n"
+                 "    float oob = (*args.c0).v[4].x;\n"
+                 "    bool good = (fabs(ok0 - 1.0f) < 0.01f) && (fabs(oob) < 0.01f);\n"
+                 "    if (dm_lid == 0u) dm_out.set_primitive_count(good ? 2u : 0u);\n"
+                 "    if (good && dm_lid < 4u) {\n"
+                 "        uint col = dm_first[0] + dm_gid;\n"
+                 "        V17 v;\n"
+                 "        float x = float(col + (dm_lid & 1u)) / 4.0f - 1.0f;\n"
+                 "        v.p = float4(x, (dm_lid & 2u) ? 1.0f : -1.0f, 0.0f, 1.0f);\n"
+                 "        dm_out.set_vertex(dm_lid, v);\n"
+                 "    }\n"
+                 "    const uchar ix[6] = {0, 1, 2, 2, 1, 3};\n"
+                 "    if (good && dm_lid < 6u) dm_out.set_index(dm_lid, ix[dm_lid]);\n"
+                 "}\n";
+            NSError *e17 = nil;
+            id<MTLLibrary> mLib17 = [g_dev newLibraryWithSource:mSrc17 options:dm_msl_opts() error:&e17]; REQUIRE(mLib17);
+            NvShader *m17 = [NvShader new]; m17->stage = 4; m17->mesh_kind = 2; m17->mesh_threads = 32; m17->mesh_maxv = 4; m17->mesh_maxp = 2; m17->load_depth_zero = 1;
+            strlcpy(m17->key, "1717171717171717_b", sizeof m17->key); m17->ventry = @"main0";
+            m17->fn = lib_entry(mLib17, @"main0"); REQUIRE(m17->fn);
+            m17->rf.nb = 1; m17->rf.b = calloc(1, sizeof *m17->rf.b); REQUIRE(m17->rf.b);
+            m17->rf.b[0] = (nvn_rbind){.kind = NVN_RB_CBUF, .reg = 0, .aid = 0};
+            m17->ae = [m17->fn newArgumentEncoderWithBufferIndex:0]; REQUIRE(m17->ae);
+            m17->arg_len = m17->ae.encodedLength;
+            m17->cb_ext[0] = 128;
+
+            NvProg *prog17 = [NvProg new]; prog17->sh[1] = fs; prog17->sh[4] = m17;
+            static prog_t gp17; memset(&gp17, 0, sizeof gp17); gp17.magic = MAGIC('P', 'R', 'O', 'G'); gp17.serial = nvn_new_serial(); serial_put(gp17.serial, prog17);
+
+            static uint32_t pool17[4096] __attribute__((aligned(16384)));
+            nvn_be_pool_add(pool17, sizeof pool17);
+            pool17[0] = 2; pool17[1] = 1;     // indirect mesh args: count=2, first=1 -> columns 1, 2 (0x06)
+            pool17[2] = 1; pool17[3] = 5;     // indirect mesh args: count=1, first=5 -> column 5 (0x20)
+            memset(&pool17[64], 0, 512);
+            pool17[64 + 16] = 0x3f800000u;    // +64B poison = 1.0f; padded short UBO must read 0.0f here
+
+            // Case 17a: same-submission GPU fill + open render pass before indirect mesh draw
+            frame_begin(); S.prog = &gp17;
+            mtl_sub_fill((uint64_t)(uintptr_t)&pool17[64], 16, 0x3f800000u);
+            S.ubo[4][0] = (p_bind_buf){.addr = (uint64_t)(uintptr_t)&pool17[64], .size = 16};
+            p_draw d17a = {.prim = DM_PRIM_MESH_TASKS, .instances = 1, .ind = (uint64_t)(uintptr_t)&pool17[0]};
+            o = capture(^{
+                int w17 = 0;
+                // Pre-warm pipeline outside pass, then re-open pass so draw reaches mtk_bind with g_enc != nil
+                mesh_draw(&d17a, &w17);
+            });
+            cols = frame_columns();
+
+            // Repeat cleanly with pipeline warm AND render pass explicitly open when draw starts
+            frame_begin(); S.prog = &gp17;
+            mtl_sub_fill((uint64_t)(uintptr_t)&pool17[64], 16, 0x3f800000u);
+            rp_begin(); REQUIRE(g_enc);
+            S.ubo[4][0] = (p_bind_buf){.addr = (uint64_t)(uintptr_t)&pool17[64], .size = 16};
+            o = capture(^{ int w17 = 0; mesh_draw(&d17a, &w17); });
+            int cols17a = frame_columns();
+            VERIFY(cols == 0x06 && cols17a == 0x06 && red_lines(o, nil) == 0 && !mtl_last_commit_error(),
+                   "⑰a 间接网格绘制在已开遍中因 GPU 填短 UBO 重开遍：不崩于编码线程且列 1、2 白（%#x / %#x；stderr：%s）",
+                   cols, cols17a, o.UTF8String);
+
+            // Case 17b: in-flight GPU write (gw_live != 0) from previous unwaited submission + open render pass -> second retry hits e->gpu_src cache cleanly
+            nvn_be_set_frame(++g_frame); nvn_be_sub_begin(); state_reset();
+            pool17[64 + 16] = 0x3f800000u;
+            mtl_sub_fill((uint64_t)(uintptr_t)&pool17[64], 16, 0x3f800000u);
+            (void)nvn_be_sub_commit();   // purposely do not wait so gw_live is active during next submission
+
+            frame_begin(); S.prog = &gp17;
+            S.ubo[4][0] = (p_bind_buf){.addr = (uint64_t)(uintptr_t)&pool17[64], .size = 16};
+            p_draw d17b = {.prim = DM_PRIM_MESH_TASKS, .instances = 1, .ind = (uint64_t)(uintptr_t)&pool17[2]};
+            uint64_t made0 = g_cb_pad_made;
+            rp_begin(); REQUIRE(g_enc);
+            o = capture(^{ int w17 = 0; mesh_draw(&d17b, &w17); });
+            int cols17b = frame_columns();
+            VERIFY(cols17b == 0x20 && g_cb_pad_made == made0 + 1 && red_lines(o, nil) == 0 && !mtl_last_commit_error(),
+                   "⑰b 在途 gw_live 触发 GPU 补零重试命中 g_cb_pad：无红行、只拷 1 次（+%llu）、列 5 白（%#x；stderr：%s）",
+                   (unsigned long long)(g_cb_pad_made - made0), cols17b, o.UTF8String);
+
+            nvn_be_pool_del(pool17);
+        }
+        // ⑱ mtk_opt_mesh_src 含早退 return 时拒绝 dev=1 改写，避免提前 return 漏还 dm_scratch 槽
+        {
+            NSString *retSrc18 =
+                @"#include <metal_stdlib>\nusing namespace metal;\n"
+                 "struct dm_vertex_t { float4 position [[position]]; };\n"
+                 "using M18 = mesh<dm_vertex_t, void, 4, 2, topology::triangle>;\n"
+                 "[[mesh]] void main0(M18 dm_out, uint dm_lid [[thread_index_in_threadgroup]])\n"
+                 "{\n"
+                 "    threadgroup spvUnsafeArray<uint, 2048> _99;\n"
+                 "    for (uint i = dm_lid; i < 2048u; i += 32u) _99[i] = 0u;\n"
+                 "    if (dm_lid > 100u) return;\n"
+                 "    dm_out.set_primitive_count(0u);\n"
+                 "}\n";
+            int dev18 = 0, bstore18 = 0;
+            NSString *opt18 = mtk_opt_mesh_src(retSrc18, &dev18, &bstore18);
+            VERIFY(!dev18 && !opt18, "⑱ 含早期 return 的网格着色器拒绝 dev=1 暂存改写（dev=%d opt=%d）", dev18, opt18 != nil);
+        }
+        s2a_pso_archive_exit();
+        pthread_mutex_lock(&g_par_wmu);
+        pthread_mutex_unlock(&g_par_wmu);
+        [NSFileManager.defaultManager removeItemAtPath:@(pdir) error:nil];
     }
     if (failures) { printf("✗ t_nvn_mesh：%u 项里 %u 项不符\n", checks, failures); return 1; }   // 原生门禁按「✓ t_ / ✗ t_」逐组判
     printf("✓ t_nvn_mesh：%u 项全过（任务 / 网格绘制：约定字段载入、上限报红、无顶点阶段的程序、直接 / 有任务 / GPU 写参数的间接 / 零工作量画出的列与手算一致、缺网格着色器报红、映射表阶段名 task / mesh 载入、无网格管线的 GPU 跳过报红）\n", checks); return 0;

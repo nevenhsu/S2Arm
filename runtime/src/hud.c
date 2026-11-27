@@ -214,7 +214,7 @@ static void line_energy(char *o, size_t n, const s2a_hud_host *h) {
     snprintf(o, n, "进程功率 %s\n整机功率 %s · 发热 %s\n电量 %s", w, sp, h && h->thermal ? h->thermal : NOT_GIVEN, b);
 }
 
-// 满屏：出图宽高比（通用取出图源矩形，直连取出图层）对屏幕宽高比；宽屏层级
+// 满屏：出图宽高比（通用与直连均取出图源矩形）对屏幕宽高比；宽屏层级
 static void line_fit(char *o, size_t n, const s2a_hud_host *h) {
     void (*gsz)(int *, int *) = (void (*)(int *, int *))dlsym(RTLD_DEFAULT, s2a_gfx_mode() == S2A_GFX_DIRECT ? "s2a_direct_out_size" : "nxgal_out_size");
     int ow = 0, oh = 0; if (gsz) gsz(&ow, &oh);

@@ -375,6 +375,52 @@ int main(void) { @autoreleasepool {
         CHECK(nbig == -1 && dt < 5000000ull, "⑬ 同页 20000 条：pend_since 回 %d（应 -1）、用时 %.3f ms（应 < 5 ms）", nbig, dt / 1e6);
         pend_reset();
         printf("%s ⑬ 同页 100 条回 %d、20000 条回 %d（%.3f ms）\n", bad > bad11 ? "✗" : "✓", n100, nbig, dt / 1e6); }
+    {   // ⑭ #41 补充根修与负对照：
+        //   (1) 在途提交的内联常量写（ifw_put）不拒绝未命中缓存的部分影子 ubp_get（由 ifw_get 叠回），但 CPU 读仍通过 gw_pending_fence 等它，非 ifw 写（gw_put）仍拒绝 ubp_get；
+        //   (2) > 256 KB（SBW_PAGES = 64）的大存储写进 g_sbw_wide / g_gw_wide，20 段 4 MB（合计 20,480 页 > SBW_N）不溢出 g_sbw_over / g_gw_all，
+        //       相同大区间的重复登记命中 g_sbw_memo、无关区间 ubp_get 照过，与宽区间重叠的查询在提交前后分别按 sbw / gw 拒绝
+        unsigned bad14 = bad; reset();
+        memset(g_gw, 0, sizeof g_gw); memset(g_gw_wide, 0, sizeof g_gw_wide); g_gw_all = 0; g_done = 10;
+        uint64_t F = (uint64_t)(uintptr_t)pm + 0x20000, g14 = 0; const uint8_t *c14 = NULL;
+        uint8_t patch16[16]; for (int i = 0; i < 16; i++) patch16[i] = (uint8_t)(0x80 + i);
+        CHECK(ifw_put(F + 16, F + 32, patch16, 15, g_done), "⑭(1) 夹具 ifw_put 应成功");
+        uint64_t why2_0 = g_ubp_why[2];
+        int ok_ifw = ubp_get(F, F + 256, &g14, &c14); if (ok_ifw) ubq_cpu(g_ubp_q);
+        CHECK(ok_ifw == 1 && g_ubp_why[2] == why2_0 && !memcmp(c14 + 16, patch16, 16),
+              "⑭(1) 在途 ifw_put 不拒未缓存 ubp_get 且叠回内容对（ok=%d why2 +%llu）", ok_ifw, (unsigned long long)(g_ubp_why[2] - why2_0));
+        uint64_t f_cpu = gw_pending_fence(F, F + 256, NULL);
+        CHECK(f_cpu == 15, "⑭(1a 负对照) CPU 读仍见在途 ifw 栅栏：%llu（应 15）", (unsigned long long)f_cpu);
+        gw_put(F + 0x1000, F + 0x1040, 15, g_done); why2_0 = g_ubp_why[2];
+        int ok_nonifw = ubp_get(F + 0x1000, F + 0x1100, &g14, &c14);
+        CHECK(ok_nonifw == 0 && g_ubp_why[2] == why2_0 + 1,
+              "⑭(1b 负对照) 在途非 ifw 写（gw_put）仍拒 ubp_get（ok=%d why2 +%llu）", ok_nonifw, (unsigned long long)(g_ubp_why[2] - why2_0));
+
+        pend_reset(); memset(g_gw, 0, sizeof g_gw); memset(g_gw_wide, 0, sizeof g_gw_wide); g_gw_all = 0; g_done = 20;
+        uint64_t W_hit = (uint64_t)(uintptr_t)pm + 0x80000;   // 512 KB（128 页 > SBW_PAGES=64），落在 pm 内便于做重叠负对照
+        sbw_note(W_hit, 512u << 10, SBW_GPU);
+        for (int i = 0; i < 20; i++) sbw_note(0x500000000ull + (uint64_t)i * (4u << 20), 4u << 20, SBW_GPU);
+        uint32_t sg0 = g_sbw_gen;
+        sbw_note(W_hit, 512u << 10, SBW_GPU);
+        for (int i = 0; i < 20; i++) sbw_note(0x500000000ull + (uint64_t)i * (4u << 20), 4u << 20, SBW_GPU);
+        CHECK(g_sbw_over == 0 && g_nsbw == 0 && g_nsbw_wide == 21 && g_sbw_gen == sg0,
+              "⑭(2) 20×4MB+512KB（>SBW_N 页）进 g_sbw_wide 不溢出且重复登记命中 memo（over=%d nsbw=%d wide=%d gen差=%u）",
+              g_sbw_over, g_nsbw, g_nsbw_wide, g_sbw_gen - sg0);
+        int ok_unrel = ubp_get(F, F + 256, &g14, &c14);
+        uint64_t why1_0 = g_ubp_why[1];
+        int ok_ov_sbw = ubp_get(W_hit, W_hit + 256, &g14, &c14);
+        CHECK(ok_unrel == 1 && ok_ov_sbw == 0 && g_ubp_why[1] == why1_0 + 1,
+              "⑭(2 负对照-提交前) 无关 ubp_get 过(%d)，重叠 ubp_get 按 sbw 拒(%d why1 +%llu)", ok_unrel, ok_ov_sbw, (unsigned long long)(g_ubp_why[1] - why1_0));
+        gw_commit(25);
+        CHECK(g_gw_all <= g_done, "⑭(2) gw_commit 后不触发 g_gw_all（g_gw_all=%llu g_done=%llu）", (unsigned long long)g_gw_all, (unsigned long long)g_done);
+        pend_reset();   // 新一次提交、旧 ubp 缓存失效（g_pend_gen 已推进），fence 25 仍在途
+        int ok_unrel2 = ubp_get(F, F + 256, &g14, &c14);
+        why2_0 = g_ubp_why[2];
+        int ok_ov_gw = ubp_get(W_hit, W_hit + 256, &g14, &c14);
+        CHECK(ok_unrel2 == 1 && ok_ov_gw == 0 && g_ubp_why[2] == why2_0 + 1,
+              "⑭(2 负对照-提交后) 在途 fence 25 下无关 ubp_get 仍过(%d)，重叠 ubp_get 按 gw_wide 拒(%d why2 +%llu)", ok_unrel2, ok_ov_gw, (unsigned long long)(g_ubp_why[2] - why2_0));
+
+        memset(g_gw, 0, sizeof g_gw); memset(g_gw_wide, 0, sizeof g_gw_wide); g_gw_all = 0; g_done = 0; reset();
+        printf("%s ⑭ 在途 ifw_put 叠回不拒、>256KB 大写进 wide 表不溢 g_gw_all（正/负对照全过）\n", bad > bad14 ? "✗" : "✓"); }
     printf("%s t_nvn_ubd_index：%s\n", bad ? "✗" : "✓", bad ? "有不符" : "延后表查找同参照、512 条下单次查找低于 400 条指令");
     return bad != 0;
 } }

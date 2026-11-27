@@ -23,6 +23,9 @@
 //   有改登记就整表重走（丢表重建）→ ⑥ 红；不处理改登记的编号 → ⑥ ⑨ 红；读过的编号不随存储变化重查 → ⑨b 红
 #include "../gfx/nvn/nvn_mtl.m"
 #include <malloc/malloc.h>
+#include <signal.h>
+int s2a_direct_fault(void *addr, int is_write, void *uctx);
+static void on_sig17(int s, siginfo_t *si, void *uc) { if (s2a_direct_fault(si->si_addr, 1, uc)) return; signal(s, SIG_DFL); }
 
 static unsigned checks, fails;
 #define REQUIRE(x) do { if (!(x)) { fprintf(stderr, "FAIL setup %s:%d %s\n", __FILE__, __LINE__, #x); exit(2); } } while (0)
@@ -437,9 +440,10 @@ int main(void) { @autoreleasepool {
         VERIFY(rid_old != dum && b_new != b_old_keep && rid_old_after == rid_old && rid_new_after == dum,
                "⑯b 在途池表写时拷贝：旧表保留真图(%d) 新表换缓冲(%d) 新表为哑图(%d)",
                rid_old_after == rid_old, b_new != b_old_keep, rid_new_after == dum);
-        // ⑰ pool_seen_scan 快速重查：仅 guest 脏代号变化（dg != g_seen_dirty, sg == g_seen_ser）时跳过非 CPU 写入贴图（view_pkg == 0）；g_ser_gen 变化时照常全量重查
+        // ⑰ pool_seen_scan 快速重查：仅 guest 脏代号变化（dg != g_seen_dirty, sg == g_seen_ser）时跳过非 CPU 写入贴图（view_pkg == 0）；全局串口代号前进时照常全量重查
         os_unfair_lock_lock(&g_rmu);
         pool_seen_scan();   // 同步 g_seen_sub / g_seen_dirty / g_seen_ser
+        uint64_t dg_now = nvn_dirty_now();
         int gpu_seen = 0, pkg_seen = 0, total_seen = 0;
         // 找一个已读贴图，强制设一个为 view_pkg=0（GPU 独占），统计当前所有已读 ID 中会被 dg-only 重查的数量
         int gpu_id = -1;
@@ -447,20 +451,21 @@ int main(void) { @autoreleasepool {
             if (!g_treg[i].ok || !pool_seen(i) || (g_seen_todo[(unsigned)i >> 5] >> (i & 31) & 1)) continue;
             if (gpu_id < 0 && g_treg[i].view && g_treg[i].view_ser == g_ser_gen) { gpu_id = i; g_treg[i].view_pkg = 0; }
             total_seen++;
-            if (g_treg[i].view && g_treg[i].view_ser == g_ser_gen && !g_treg[i].view_pkg) gpu_seen++; else pkg_seen++;
+            if (g_treg[i].view && g_treg[i].view_pkg) { g_treg[i].view_dirty = dg_now - 1; pkg_seen++; }
+            else gpu_seen++;
         }
         uint64_t u0 = g_pool_upd_seen;
-        g_seen_dirty--;   // 模拟仅 guest 脏代号前进（同提交内 !new_sub && dg_chg && !sg_chg）
+        g_pkg_epoch++; g_seen_dirty--;   // 模拟仅 guest 脏代号前进（新 epoch 下同提交内 !new_sub && recheck_dg）
         pool_seen_scan();
         uint64_t du_dg = g_pool_upd_seen - u0;
         uint64_t u1 = g_pool_upd_seen;
-        g_seen_ser--;     // 模拟 g_ser_gen 前进（同提交内 !new_sub && sg_chg）
+        ser_gen_bump_all();   // 模拟全局串口代号前进（sg_hit 对全量已读生效）
         pool_seen_scan();
         uint64_t du_sg = g_pool_upd_seen - u1;
-        uint32_t nw = g_nseen_words;
+        uint32_t nw = g_seen_n;
         os_unfair_lock_unlock(&g_rmu);
         VERIFY(gpu_seen > 0 && nw > 0 && (int)du_dg == pkg_seen && (int)du_sg == total_seen,
-               "⑰ pool_seen_scan 紧凑重查：active_words=%u，dg-only 重查 %llu（期望仅 view_pkg=%d，跳过 gpu_only=%d），sg 重查 %llu（期望全量=%d）",
+               "⑰ pool_seen_scan 紧凑重查：seen_n=%u，dg-only 重查 %llu（期望仅 view_pkg=%d，跳过 gpu_only=%d），sg 重查 %llu（期望全量=%d）",
                nw, (unsigned long long)du_dg, pkg_seen, gpu_seen, (unsigned long long)du_sg, total_seen);
         // ⑱ pool_room：按 GPU 真占（不含零拷贝包的游戏内存）对工作集一半、内存余量、单帧 32 MB 放行；新登记贴图首查即入池表不落哑图
         //   期望手算：工作集 28 GB → 上限 14 GB；真占 5 GB 余 9 GB，单帧未花 → 32 MB，已花 28 MB → 4 MB，花满 → 0；真占 15 GB → 0；
@@ -492,6 +497,76 @@ int main(void) { @autoreleasepool {
                    (unsigned long long)r_gpu_hi, (unsigned long long)(floor >> 20), (unsigned long long)(floor_off >> 20), (unsigned long long)r_ios_mid, (unsigned long long)r_ios_lo,
                    (unsigned long long)(r_ios_ok >> 20), (unsigned long long)e164, (unsigned long long)dum);
         }
+    }
+    // ⑱ pool_seen_scan 按串口分桶 + 永久空视图不空转：
+    //   - GPU 专用已读贴图（!view_pkg）与视图持续为 NULL 的已读 ID 在脏页代数 / 无关串口桶变化时不触发 pool_seen_scan 重查；
+    //   - 负对照 A：自身串口发生变更（serial_put 抬高它自己的 g_sgen_bucket）→ 触发重查（g_pool_upd_seen +1）；
+    //   - 负对照 B：CPU 写过的（view_pkg）已读贴图在宿主脏页代数前进且 epoch 翻新后 → 触发重查（g_pool_upd_seen +1）
+    if (cs) {
+        { struct sigaction sa = {0}; sa.sa_sigaction = on_sig17; sa.sa_flags = SA_SIGINFO; sigaction(SIGBUS, &sa, NULL); sigaction(SIGSEGV, &sa, NULL); }
+        nvn_dirty_add_range(memory, MEM);
+        // 170：GPU 专用贴图（IMAGE 用途不走打包、无 layout），选一个与已有 seen ID 不撞桶的串口
+        uint64_t s170 = nvn_new_serial();
+        for (;;) { int clash = 0; for (uint32_t j = 0; j < g_seen_n; j++) { uint32_t id_ = g_seen_list[j]; if ((int)id_ > 0 && (int)id_ < g_ntreg && g_treg[id_].ok && (g_treg[id_].t.serial & (SGEN_BUCKETS - 1)) == (s170 & (SGEN_BUCKETS - 1))) { clash = 1; break; } } if (!clash) break; s170 = nvn_new_serial(); }
+        tex_t *t170 = &texs[170]; memset(t170, 0, sizeof *t170); t170->magic = MAGIC('T', 'E', 'X', 0); t170->serial = s170;
+        t170->d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_R32F, .width = 4, .height = 4, .depth = 1, .levels = 1, .flags = NVN_TEXTURE_FLAGS_IMAGE};
+        nvn_tex_layout(&t170->d, &t170->L); size_t off170 = (mem_next + 0xffff) & ~(size_t)0xffff; REQUIRE(off170 + t170->L.size <= MEM); mem_next = off170 + t170->L.size;
+        t170->pool = pool; t170->off = (int64_t)off170; t170->mem = pool->mem + off170;
+        nvn_be_tex_init(t170); nvn_be_reg_tex(170, t170, NULL);
+        read4(cs, 170u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
+        // 172：永久无法建出视图的已读 ID（BC 格式但视图指定非 BC 格式，tex_by_id_ptr 必回 NULL）
+        tex_t *t172 = &texs[172]; memset(t172, 0, sizeof *t172); t172->magic = MAGIC('T', 'E', 'X', 0); t172->serial = nvn_new_serial();
+        t172->d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA_DXT1, .width = 4, .height = 4, .depth = 1, .levels = 1};
+        nvn_tex_layout(&t172->d, &t172->L); size_t off172 = (mem_next + 0xffff) & ~(size_t)0xffff; REQUIRE(off172 + t172->L.size <= MEM); mem_next = off172 + t172->L.size;
+        t172->pool = pool; t172->off = (int64_t)off172; t172->mem = pool->mem + off172;
+        view_t v172; memset(&v172, 0, sizeof v172); v172.set_format = 1; v172.format = NVN_FORMAT_RGBA8;
+        nvn_be_tex_init(t172); nvn_be_reg_tex(172, t172, &v172);
+        read4(cs, 172u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
+        // 171：CPU 写过（view_pkg = 1）的已读贴图
+        texture(171, 4, 4, 0); nvn_be_tex_cpu_written(&texs[171]);
+        read4(cs, 171u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
+
+        // 先走两轮把 todo / g_ser_gen 稳定下来，确认 170(!view_pkg) / 171(view_pkg) / 172(!view)
+        empty_sub(); nvn_be_sub_begin(); (void)table_entry(170, 0, NULL); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        REQUIRE(g_treg[170].view && !g_treg[170].view_pkg && g_treg[171].view && g_treg[171].view_pkg && !g_treg[172].view);
+        size_t pgoff = (mem_next + 0x3fff) & ~(size_t)0x3fff; REQUIRE(pgoff + 0x4000 <= MEM); mem_next = pgoff + 0x4000;
+        nvn_dirty_protect(memory + pgoff, 0x4000); memory[pgoff] ^= 1;
+        nvn_be_sub_begin(); g_pkg_epoch++; (void)table_entry(170, 0, NULL); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+
+        // 先测：只抬一个与所有已有 seen ID 不同桶的串口（170、172 都不能被重查）
+        uint64_t other_ser = nvn_new_serial();
+        for (;;) { int clash = 0; for (uint32_t j = 0; j < g_seen_n; j++) { uint32_t id_ = g_seen_list[j]; if ((int)id_ > 0 && (int)id_ < g_ntreg && g_treg[id_].ok && (g_treg[id_].t.serial & (SGEN_BUCKETS - 1)) == (other_ser & (SGEN_BUCKETS - 1))) { clash = 1; break; } } if (!clash) break; other_ser = nvn_new_serial(); }
+        serial_put(other_ser, [NSObject new]);
+        uint64_t upd0 = g_pool_upd_seen;
+        nvn_be_sub_begin(); (void)table_entry(170, 0, NULL); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        uint64_t du_other = g_pool_upd_seen - upd0;
+
+        // 同 epoch 下再触一次真写保护故障（先在该提交内让所有 view_pkg ID 同步 view_ep == g_pkg_epoch，再同一提交/epoch 内再脏一次）：170(!view_pkg) / 172(!view) / 同epoch已查的171 都不得重查
+        nvn_dirty_protect(memory + pgoff, 0x4000); memory[pgoff] ^= 4;
+        nvn_be_sub_begin(); g_pkg_epoch++; (void)table_entry(170, 0, NULL);   // recheck_dg=1，让所有 view_pkg 的 view_ep 同步到当前 g_pkg_epoch
+        nvn_dirty_protect(memory + pgoff, 0x4000); memory[pgoff] ^= 8;
+        upd0 = g_pool_upd_seen;
+        (void)table_entry(170, 0, NULL);
+        uint64_t du_dirty_same_ep = g_pool_upd_seen - upd0;
+        { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+
+        // 负对照 A：170 自身串口变更 → +1
+        id<MTLTexture> x170 = tex_get(t170->serial); REQUIRE([x170 conformsToProtocol:@protocol(MTLTexture)]);
+        serial_put(t170->serial, x170);
+        upd0 = g_pool_upd_seen;
+        nvn_be_sub_begin(); (void)table_entry(170, 0, NULL); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        uint64_t du_own = g_pool_upd_seen - upd0;
+
+        // 负对照 B：脏页代数前进 + g_pkg_epoch 翻新 → 触发 view_pkg(171) 重查
+        nvn_dirty_protect(memory + pgoff, 0x4000); memory[pgoff] ^= 2;
+        uint64_t dirty_upd0 = g_pool_upd_seen;
+        nvn_be_sub_begin(); g_pkg_epoch++; (void)table_entry(170, 0, NULL); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        uint64_t du_dirty = g_pool_upd_seen - dirty_upd0;
+
+        VERIFY(du_other == 0 && du_dirty_same_ep == 0 && du_own == 1 && du_dirty >= 1,
+               "⑱ pool_seen_scan 串口分桶与永久 NULL 跳过：无关串口桶更新=%llu(应0) 同epoch脏页更新=%llu(应0) 自身串口桶更新=%llu(应1) 脏页+epoch触发pkg更新=%llu(应>=1)",
+               (unsigned long long)du_other, (unsigned long long)du_dirty_same_ep, (unsigned long long)du_own, (unsigned long long)du_dirty);
+        serial_del(other_ser);
     }
     printf("%s t_nvn_pool_tex：%u 项，%u 项失败（追不到槽的句柄按编号读池：池表 + 已读位图 + 未写渲染目标不建 + 小贴图预建 + 表复用）\n", fails ? "✗" : "✓", checks, fails);
     return fails != 0;

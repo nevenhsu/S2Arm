@@ -97,6 +97,50 @@ int main(void) {
             CHECK(last && again == last && g_fbsnap_bytes <= FB_SNAP_CAP && ev >= 11,
                 "⑨ 快照池合计 %.1f MB（上限 %u MB）、因上限放掉 %llu 张（期望 ≥ 11）、刚取的那张还在 %d", g_fbsnap_bytes / 1048576.0, FB_SNAP_CAP >> 20, (unsigned long long)ev, again == last);
         }
+        {   // ⑩ dsnap_stale_dispatch 按计算着色器写的图像精确失效 g_dsnap
+            static uint8_t dpool[1 << 20] __attribute__((aligned(65536)));
+            nvn_be_pool_add(dpool, sizeof dpool);
+            tex_t td10, tc10, to10;
+            memset(&td10, 0, sizeof td10); td10.magic = MAGIC('T', 'E', 'X', 0); td10.serial = nvn_new_serial(); td10.mem = dpool; td10.L.size = 0x10000;
+            nvn_be_reg_tex(30, &td10, NULL);
+            memset(&tc10, 0, sizeof tc10); tc10.magic = MAGIC('T', 'E', 'X', 0); tc10.serial = nvn_new_serial(); tc10.mem = dpool + 0x40000; tc10.L.size = 0x10000;
+            nvn_be_reg_tex(31, &tc10, NULL);
+            memset(&to10, 0, sizeof to10); to10.magic = MAGIC('T', 'E', 'X', 0); to10.serial = nvn_new_serial(); to10.mem = dpool + 0x8000; to10.L.size = 0x4000;
+            nvn_be_reg_tex(32, &to10, NULL);
+            g_dsnap.valid = 1; g_dsnap.ser = td10.serial; g_dsnap.mem = td10.mem; g_dsnap.size = td10.L.size; g_dsnap.base = nil;
+
+            NvShader *cs_buf = [NvShader new];
+            cs_buf->rf.b = calloc(1, sizeof *cs_buf->rf.b); REQUIRE(cs_buf->rf.b); cs_buf->rf.nb = 1;
+            cs_buf->rf.b[0] = (nvn_rbind){.kind = NVN_RB_SBUFP, .reg = 0, .rw = 1};
+            dsnap_stale_dispatch(cs_buf);
+            CHECK(g_dsnap.valid == 1, "⑩ 只写缓冲的计算核不失效深度快照");
+
+            NvShader *cs_img = [NvShader new];
+            cs_img->rf.b = calloc(1, sizeof *cs_img->rf.b); REQUIRE(cs_img->rf.b); cs_img->rf.nb = 1;
+            cs_img->rf.b[0] = (nvn_rbind){.kind = NVN_RB_IMG, .reg = 0, .rw = 1};
+            S.img[5][0] = 31; g_handle_read_failed = 0;
+            dsnap_stale_dispatch(cs_img);
+            CHECK(g_dsnap.valid == 1, "⑩ 写无关图像的计算核不失效深度快照");
+
+            S.img[5][0] = 32;
+            dsnap_stale_dispatch(cs_img);
+            CHECK(g_dsnap.valid == 0, "⑩ 写重叠地址范围图像的计算核失效深度快照");
+
+            g_dsnap.valid = 1; S.img[5][0] = 30;
+            dsnap_stale_dispatch(cs_img);
+            CHECK(g_dsnap.valid == 0, "⑩ 写同序列号图像的计算核失效深度快照");
+
+            g_dsnap.valid = 1; dsnap_stale_dispatch(NULL);
+            CHECK(g_dsnap.valid == 0, "⑩ cs==NULL 保守失效深度快照");
+
+            g_dsnap.valid = 1; cs_buf->tensor = 1; dsnap_stale_dispatch(cs_buf);
+            CHECK(g_dsnap.valid == 0, "⑩ tensor==1 保守失效深度快照");
+
+            g_dsnap.valid = 1; cs_buf->tensor = 0; cs_buf->builtin = "test"; dsnap_stale_dispatch(cs_buf);
+            CHECK(g_dsnap.valid == 0, "⑩ builtin!=NULL 保守失效深度快照");
+
+            nvn_be_pool_del(dpool);
+        }
         unlink(map); unlink(user);
     }
     printf("%s t_nvn_dsnap_slots: %u checks %u failures\n", failures ? "✗" : "✓", checks, failures);

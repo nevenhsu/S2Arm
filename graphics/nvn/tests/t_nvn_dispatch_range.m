@@ -34,7 +34,20 @@ static int game_mode(void) {   // 缺省：按游戏屏障
     S.ssbo[5][0] = (p_bind_buf){5, 0, 0x1000, 0x100}; S.ubo[5][1] = (p_bind_buf){5, 1, 0x9000, 0x40};
     disp_ranges(A, 0, &r); disp_note(&r); expect("己同一段再记：派发写表仍 1 条", 1, g_dw_n); expect("派发读表仍 2 条", 2, g_dr_n);
     g_dw_n = DW_MAX; expect("庚派发写表已满：要屏障", 1, disp_hits(&r));
-    if (fails) printf("✗ t_nvn_dispatch_range（按游戏屏障）：%d 项不符\n", fails); else printf("✓ t_nvn_dispatch_range（按游戏屏障）：派发之间看游戏屏障、与拷贝之间看范围、去重、表满\n");
+    // 辛：未知读写范围的派发（disp_need_barrier(NULL)）在按游戏屏障模式下不放屏障、写 g_dw 通配；拷贝碰它照放、游戏发过屏障或有在先拷贝才放
+    reset();
+    g_dw_lo[0] = 0; g_dw_hi[0] = ~0ull; g_dw_n = 1; g_blit_ops = 1;
+    expect("辛未知范围连发且无游戏屏障/无拷贝：不要屏障", 0, disp_need_barrier(NULL));
+    expect("辛有界派发紧随未知范围且无游戏屏障/无拷贝：不要屏障", 0, disp_need_barrier(&r));
+    disp_note(&r);
+    expect("辛通配已覆盖时不重记 g_dw：仍 1 条", 1, g_dw_n);
+    expect("辛拷贝碰未知范围派发：要屏障", 1, blit_conflict(0x1000, 0x1100, 0x2000, 0x2100));
+    g_bw_lo[0] = 0x5000; g_bw_hi[0] = 0x5100; g_bw_n = 1;
+    expect("辛有在先拷贝时未知范围派发：要屏障", 1, disp_need_barrier(NULL));
+    g_bw_n = 0; g_dsp_game_bar = 1; uint64_t gb1 = g_disp_gbar;
+    expect("辛游戏发过屏障时未知范围派发：要屏障", 1, disp_need_barrier(NULL));
+    expect("辛未知范围命中游戏屏障计数 +1", 1, (long)(g_disp_gbar - gb1));
+    if (fails) printf("✗ t_nvn_dispatch_range（按游戏屏障）：%d 项不符\n", fails); else printf("✓ t_nvn_dispatch_range（按游戏屏障）：派发之间看游戏屏障、与拷贝之间看范围、未知范围、去重、表满\n");
     return fails != 0;
 }
 int main(void) { @autoreleasepool {

@@ -35,6 +35,8 @@ int nvn_be_present_shutdown(void) {
         if (g_present_layer_resident && !g_m3) [g_q4 removeResidencySet:g_present_layer_resident.residencySet];
     }
     g_present_layer_resident = nil;
+    atomic_store_explicit(&g_present_out_w, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_present_out_h, 0, memory_order_relaxed);
     return 0;
 }
 static int session_wait_backend(void) {
@@ -152,11 +154,19 @@ static int nvn_be_shutdown_session_body(void) {
     //   与写过报告的地址表、见过的事件地址
     g_adhoc_nk = 0; g_rc_nsubmitted = 0; free(g_rc_occ); g_rc_occ = NULL; g_rc_ocap = g_rc_on = 0; g_neva = 0;
     free(g_pidx); g_pidx = NULL; g_pidx_cap = g_pidx_ok = 0; g_plast = -1;
-    atomic_fetch_add(&g_pool_gen, 1); atomic_fetch_add(&g_reg_gen, 1); atomic_fetch_add(&g_ser_gen, 1);
+    for (int s = 0; s < GMEM_RECYCLE; s++) {
+        if (g_gmem_rec[s].buf) { res_remove(g_gmem_rec[s].buf); g_gmem_rec[s].buf = nil; }
+        g_gmem_rec[s].fence = 0; atomic_store(&g_gmem_rec[s].busy, 0);
+    }
+    if (g_gmem_buf && g_gmem_cur_slot < 0) res_remove(g_gmem_buf);
+    g_gmem_buf = nil; g_gmem_cpu = nil; g_gmem_gen = g_gmem_built_rgen = 0; g_gmem_cur_slot = -1; g_gmem_built_on = -1;
+    g_last_end_relaxed = 0; g_game_barrier = 0; main_barrier_reset();
+    atomic_fetch_add(&g_pool_gen, 1); atomic_fetch_add(&g_gmem_pgen, 1); atomic_fetch_add(&g_reg_gen, 1); atomic_fetch_add(&g_ser_gen, 1);
     // Keys for these caches include program/guest buffer identity. Reuse only
     // the compiled shader cache (its keys are content hashes).
     nvn_hm_clear(&g_pso, hm_rel); nvn_hm_clear(&g_cps, hm_rel);
     if (g_mtk_group) dispatch_group_wait(g_mtk_group, DISPATCH_TIME_FOREVER);   // task / mesh pipelines (nvn_geometry.inc mtk_pso): the background builds write the map
+    mtk_scratch_reset();
     os_unfair_lock_lock(&g_pso_mtk_lock); nvn_hm_clear(&g_pso_mtk, hm_rel); atomic_store(&g_pb_mtk, 0); os_unfair_lock_unlock(&g_pso_mtk_lock);   // g_pb_mtk: 网格管线条数（管线额度 ⑦）
     nvn_hm_clear(&g_pso_fail, hm_rel); nvn_hm_clear(&g_pso_retry, hm_rel);
     ir_clear(); nvn_hm_clear(&g_rt_seen, NULL); nvn_hm_clear(&g_rt_seen_mem, NULL); nvn_hm_clear(&g_rt_fresh, NULL);

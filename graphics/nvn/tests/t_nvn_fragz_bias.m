@@ -17,6 +17,7 @@
 #include "s2a_t_result.h"
 
 static unsigned checks, failures;
+#define REQUIRE(c) do { if (!(c)) { fprintf(stderr, "SETUP FAIL %d: %s\n", __LINE__, #c); exit(2); } } while (0)
 #define CHECK(c, ...) do { checks++; int ok=!!(c); failures+=!ok; printf("%s ",ok?"PASS":"FAIL"); printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while(0)
 
 static const char *k_src =
@@ -40,6 +41,9 @@ int main(void) { @autoreleasepool {
     CHECK(fragz_bias_units(0, 1, 0, L, 1, 1, "t") == 0, "① 不读 gl_FragCoord.z（只读 .xy 的 frag_coord 不算）→ 0");
     CHECK(fragz_bias_units(1, 1, 0, L, 1, 0, "t") == 0, "① 没取样深度贴图 → 0");
     CHECK(fragz_bias_units(1, 0, 0, L, 1, 1, "t") == 0 && fragz_bias_units(1, 1, 0, L, 0, 1, "t") == 0, "① 不测深度 / 没有深度附件 → 0");
+    CHECK(shader_fragz_from_json(@{@"frag_coord": @YES}, 1) == 1, "①b 缺 frag_z 时按 frag_coord 回退 → 1");
+    CHECK(shader_fragz_from_json(@{@"frag_coord": @YES, @"frag_z": @NO}, 1) == 0, "①b 显式 frag_z=0 时保持 0");
+    CHECK(shader_fragz_from_json(@{@"frag_coord": @NO, @"frag_z": @YES}, 0) == 1, "①b 显式 frag_z=1 时返回 1");
 
     // ② 真 Metal：256×1，三角形左缘 z 1e-4，右顶点在屏幕右缘（那一行最右的像素 z 接近右顶点，和三角形最大深度同一个指数段），两遍都把 [[position]].z 写进 R32F
     {
@@ -99,6 +103,39 @@ int main(void) { @autoreleasepool {
             CHECK(max_sh <= -units * unit * 1.0001f, "② 右顶点 z %.3g：c. 移的绝对量最大 %.3g ≤ 一个单位 %.3g（近端 z=%.4g 处约 %.0f ULP）",
                   tops[k], max_sh, -units * unit, a[0], near_ulps);
         }
+    }
+    {   // ③ fs_samples_depth 覆盖 NVN_RB_TEXU（绑定在统一缓冲里的无绑定深度贴图句柄）
+        char map[] = "/tmp/t_fragz_map_XXXXXX"; int fd = mkstemp(map); REQUIRE(fd >= 0); close(fd);
+        char user[] = "/tmp/t_fragz_usr_XXXXXX"; fd = mkstemp(user); REQUIRE(fd >= 0); close(fd);
+        setenv("DM_NVN_SHMAP", map, 1); setenv("DM_PSO_USER", user, 1); setenv("DM_PSO_ARCHIVE", "0", 1);
+        mtl_init();
+        static uint32_t ubo_mem[4096] __attribute__((aligned(16384)));
+        memset(ubo_mem, 0, sizeof ubo_mem);
+        nvn_be_pool_add(ubo_mem, sizeof ubo_mem);
+        tex_t td3, tc3;
+        memset(&td3, 0, sizeof td3); td3.magic = MAGIC('T', 'E', 'X', 0); td3.serial = nvn_new_serial();
+        td3.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_DEPTH32F, .width = 16, .height = 16, .depth = 1, .levels = 1};
+        nvn_be_reg_tex(20, &td3, NULL);
+        memset(&tc3, 0, sizeof tc3); tc3.magic = MAGIC('T', 'E', 'X', 0); tc3.serial = nvn_new_serial();
+        tc3.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .width = 16, .height = 16, .depth = 1, .levels = 1};
+        nvn_be_reg_tex(21, &tc3, NULL);
+        ubo_mem[0] = 21;   // scalar color
+        ubo_mem[2] = 21;   // array[0] color
+        ubo_mem[4] = 20;   // array[1] depth
+        S.ubo[1][0] = (p_bind_buf){.addr = (uint64_t)(uintptr_t)ubo_mem, .size = 64};
+        S.tex_base = S.samp_base = 0; g_handle_read_failed = 0;
+        NvShader *fs3 = [NvShader new];
+        fs3->rf.b = calloc(1, sizeof *fs3->rf.b); REQUIRE(fs3->rf.b); fs3->rf.nb = 1;
+        fs3->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEXU, .reg = 0, .off = 0};
+        CHECK(fs_samples_depth(fs3) == 0, "③ NVN_RB_TEXU 标量指颜色贴图 → fs_samples_depth = 0");
+        ubo_mem[0] = 20;
+        CHECK(fs_samples_depth(fs3) == 1, "③ NVN_RB_TEXU 标量指深度贴图 → fs_samples_depth = 1");
+        fs3->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEXU, .reg = 0, .off = 0, .n = 3};
+        CHECK(fs_samples_depth(fs3) == 1, "③ NVN_RB_TEXU 数组第 2 项指深度贴图 → fs_samples_depth = 1");
+        ubo_mem[0] = 21; ubo_mem[4] = 21;
+        CHECK(fs_samples_depth(fs3) == 0, "③ NVN_RB_TEXU 数组全为颜色贴图 → fs_samples_depth = 0");
+        nvn_be_pool_del(ubo_mem);
+        unlink(map); unlink(user);
     }
 done:
     printf("t_nvn_fragz_bias: %u checks\n", checks);

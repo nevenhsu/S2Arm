@@ -42,6 +42,26 @@ int main(void) { @autoreleasepool {
     CHECK((a & 0xFFFFFF) == 0xFFFFFF, "① 中间图不套补丁画幅：第 10 行 %08x（期望白）", a);
     CHECK((b & 0xFFFFFF) == 0, "② 对照：中间图套画幅 2.0（旧实现）→ 第 10 行 %08x（期望黑：上下各 60 行黑边）", b);
     CHECK((c & 0xFFFFFF) == 0xFFFFFF, "③ 画进 2:1 画布：最左一列 %08x（期望白，铺满）", c);
+    {
+        int ow = -1, oh = -1;
+        nvn_be_present_out_size(&ow, &oh);
+        CHECK(ow == 0 && oh == 0, "④a 上屏前 nvn_be_present_out_size 为 0x0（实得 %dx%d）", ow, oh);
+        id<MTLTexture> p2k = tex(2560, 1440);
+        uint64_t ser = mtl_ext_tex((__bridge void *)p2k);
+        tex_t pt = { .magic = MAGIC('T', 'E', 'X', 0), .serial = ser };
+        present_now(&pt, 0, 1, 1, (const int[4]){0, 0, 1920, 1080}, nil, 0);
+        nvn_be_present_out_size(&ow, &oh);
+        CHECK(ow == 1920 && oh == 1080, "④b 1920x1080 裁切上屏后 nvn_be_present_out_size = 1920x1080（实得 %dx%d）", ow, oh);
+        present_now(&pt, 0, 2, 2, (const int[4]){0, 0, 2048, 1152}, nil, 0);
+        nvn_be_present_out_size(&ow, &oh);
+        CHECK(ow == 2048 && oh == 1152, "④c 2048x1152 裁切上屏后 nvn_be_present_out_size = 2048x1152（实得 %dx%d）", ow, oh);
+        present_now(&pt, 0, 3, 3, NULL, nil, 0);
+        nvn_be_present_out_size(&ow, &oh);
+        CHECK(ow == 2560 && oh == 1440, "④d 无裁切上屏后 nvn_be_present_out_size = 2560x1440（实得 %dx%d）", ow, oh);
+        nvn_be_present_shutdown();
+        nvn_be_present_out_size(&ow, &oh);
+        CHECK(ow == 0 && oh == 0, "④e nvn_be_present_shutdown 后归零为 0x0（实得 %dx%d）", ow, oh);
+    }
     printf("%s t_present_aspect：%u 项，%u 项不符\n", failures ? "✗" : "✓", checks, failures);
     return failures != 0;
 } }

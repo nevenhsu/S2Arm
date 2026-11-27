@@ -190,6 +190,15 @@ static void test_focus_suspend(void) {
     expect(stub_focus == 0 && stub_freeze_on == 1, "shutdown publishes focus loss without freezing");
     display_focus_publish(NO); display_focus_publish_ex(NO, NO);
     expect(stub_freeze_on == 2 && stub_freeze_off == 2 && stub_clock3_off == 2, "shutdown releases a focus freeze");
+    int saved_pause_off = g_focus_pause_off;
+    g_focus_pause_off = 1; stub_suspend = 1;
+    display_focus_publish(NO);
+    expect(stub_focus == 1 && stub_freeze_on == 2 && stub_clock3_on == 2 && dm_focus_now() == 0,
+           "pause-off keeps guest focus active and skips freeze while tracking display focus");
+    display_focus_publish_ex(NO, NO);
+    expect(stub_focus == 0 && stub_freeze_on == 2,
+           "pause-off shutdown still publishes focus loss without freezing");
+    g_focus_pause_off = saved_pause_off;
     stub_suspend = 0; display_focus_publish(YES);
     puts("Mac lifecycle: focus loss freezes only when the game asks, regains and shutdown release passed");
 }

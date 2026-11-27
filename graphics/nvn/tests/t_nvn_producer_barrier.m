@@ -164,6 +164,35 @@ int main(int argc,char **argv) {
         CHECK(g_bar_covered==prior,"first copy after sub_cut keeps its consumer");
         add_seven(out); finish(); pixels(out,0xff4d3721u+7);
 
+        if(barrier_game()) {
+            // In draw_barriers=game mode, fragment-only ordering/invalidate bits stay relaxed, while primitive/indirect ordering forces a full consumer barrier.
+            nvn_be_sub_begin();
+            color(target,data); // establishes g_last_end_relaxed=1
+            uint64_t skip0=g_bar_skip, full0=g_bar_full;
+            g_game_barrier=NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_INVALIDATE_TEXTURE_BIT;
+            color(target,data);
+            CHECK(g_bar_skip==skip0+1 && g_bar_full==full0,"fragment-only NVN barrier keeps relaxed consumer skip");
+            skip0=g_bar_skip; full0=g_bar_full;
+            g_game_barrier=NVN_BARRIER_ORDER_INDIRECT_DATA_BIT;
+            color(target,data);
+            CHECK(g_bar_full==full0+1 && g_bar_skip==skip0,"indirect NVN barrier forces full consumer barrier");
+            skip0=g_bar_skip; full0=g_bar_full;
+            g_game_barrier=NVN_BARRIER_ORDER_PRIMITIVES_BIT;
+            color(target,data);
+            CHECK(g_bar_full==full0+1 && g_bar_skip==skip0,"primitive NVN barrier forces full consumer barrier");
+            skip0=g_bar_skip; full0=g_bar_full;
+            g_game_barrier=NVN_BARRIER_INVALIDATE_SHADER_BIT;
+            color(target,data);
+            CHECK(g_bar_full==full0+1 && g_bar_skip==skip0,"shader invalidate NVN barrier forces full consumer barrier");
+            CHECK(g_last_end_relaxed,"relaxed draw pass end still tracks same-CB chaining");
+            main_barrier_reset();
+            CHECK(!g_last_end_relaxed,"main_barrier_reset clears relaxed end across CB/submission boundaries");
+            full0=g_bar_full; skip0=g_bar_skip;
+            color(target,data);
+            CHECK(g_bar_full==full0+1 && g_bar_skip==skip0,"first draw after main_barrier_reset keeps full consumer barrier");
+            finish();
+        }
+
         if(argc==2 && !strcmp(argv[1],"--bench")) {
             // Original 4x4 render workload, not a game/performance acceptance.
             // Pipeline/resource creation and GPU wait are outside encode CPU.

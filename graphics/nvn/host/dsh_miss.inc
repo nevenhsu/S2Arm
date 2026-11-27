@@ -609,18 +609,20 @@ int dm_shader_se_cached(const uint8_t key[8], int st, char *path, size_t n) {
     LOG("直连采样器模拟变体：%s（%s）从本机同链同指纹源码出（控制段已过期）", k, dsh_nm[st]);
     return 0;
 }
-// #770 宿主自跑任务阶段（nvn_geometry.inc mtk_emu_fn）：任务（st 4）/ 网格（st 5）着色器在本机的基础源码 <键>_b.metal（带 S2A_MESH_EMU 入口），没有就按包里的客体输入现翻一份。
+// #770 宿主自跑任务阶段（nvn_geometry.inc mtk_emu_fn）与网格/片元优化源码：在本机的基础源码 <键>_b.metal（片元 1 / 任务 4 / 网格 5），没有就按包里的客体输入现翻一份。
 //   成功 0（path = 源码），做不了 1
 int dm_shader_base_cached(const uint8_t key[8], int st, char *path, size_t n) {
     static const char *const js[6] = {"vs", "ps", "cs", "gs", "ts", "ms"};
-    if (st != 4 && st != 5) return 1;
+    if (st != 1 && st != 4 && st != 5) return 1;
     char k[17], meta[1200], b[8192]; for (int i = 0; i < 8; i++) snprintf(k + 2 * i, 3, "%02x", key[i]);
     const char *out = getenv("DM_MSL_FALLBACK"); if (!out || !*out) return 1;
     mkdir(out, 0755);
     if (!dsh_have(out, k)) {
         dsh_comp_fn comp = dsh_comp(); uint8_t *src; uint32_t nc, nk;
-        if (!comp) { LOG("【红】直连%s源码：%s 没有翻译器，宿主跑不了它的任务阶段", st == 4 ? "任务" : "网格", k); return 1; }
-        if (dsh_pkg_src(key, st, k, st == 4 ? "任务源码（宿主跑不了它的任务阶段）" : "网格源码（宿主跑不了它的任务阶段）", &src, &nc, &nk)) return 1;
+        const char *st_nm = st == 1 ? "片元" : st == 4 ? "任务" : "网格";
+        const char *why_nm = st == 1 ? "片元源码（网格优化）" : st == 4 ? "任务源码（宿主跑不了它的任务阶段）" : "网格源码（宿主跑不了它的任务阶段）";
+        if (!comp) { LOG("【红】直连%s源码：%s 没有翻译器，做不了", st_nm, k); return 1; }
+        if (dsh_pkg_src(key, st, k, why_nm, &src, &nc, &nk)) return 1;
         int rc = dsh_comp_src_locked(comp, k, st, src + nc, nk, src, nc, out); free(src); if (rc) return 1;
     }
     if (!dsh_have(out, k)) return 1;
