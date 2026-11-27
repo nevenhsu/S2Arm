@@ -13,7 +13,7 @@ struct ControllerTestFlow {
     enum Who: Equatable { case single, pair }
     enum Hold: Equatable { case flat, paddle, boxing, handlebar }
     /// 转轴：worldUp 跟水平朝向无关；其余按手柄自己的方向定（水平朝向没有绝对参考，世界的「前 / 右」不一定是人的前 / 右）
-    ///   farEndTip = 远端那头往下压的轴（右只远端 +Y、左只远端 −Y，横握时摇杆那头朝人）；faceForward = 拳击握法时人的前方（右只 −X、左只 +X）为轴
+    ///   farEndTip = 远端那头往下压的轴（横握时两只的顶端 +Y 都朝前）；faceForward = 拳击握法时人的前方（右只 −X、左只 +X）为轴
     enum Axis: Equatable { case worldUp, farEndTip, faceForward, bodyLong }
     enum Target: Equatable {
         case hold(Hold)
@@ -39,8 +39,8 @@ struct ControllerTestFlow {
     /// 内建两套，单只、一对分开测（测到一半不用去手柄面板改分配）。面板按选的手柄自动换到对应那套
     /// 单只 Joy-Con 2：起始姿势「横握・立」，回起始姿势只在下一个动作前需要时出现一次
     static let joyConSingle = ControllerTestFlow(id: "joycon-single", hant: "Joy-Con 單只測試", hans: "Joy-Con 单只测试", en: "Joy-Con single test", steps: [
-        Step(id: "1-start", hant: "橫握・立：連接邊（滑軌）朝下立起來，搖桿那頭朝向你", hans: "横握・立：连接边（滑轨）朝下立起来，摇杆那头朝向你",
-             en: "Sideways, standing on the rail edge, stick end toward you", who: .single, target: .hold(.paddle)),
+        Step(id: "1-start", hant: "橫握・立：連接邊（滑軌）朝下立起來，搖桿朝向身體中間（右只朝左、左只朝右）", hans: "横握・立：连接边（滑轨）朝下立起来，摇杆朝向身体中间（右只朝左、左只朝右）",
+             en: "Sideways, standing on the rail edge, stick facing the middle (right one faces left, left one faces right)", who: .single, target: .hold(.paddle)),
         Step(id: "2-forehand", hant: "往正手方向水平轉 90°（右只往右、左只往左），停在收拍的位置", hans: "往正手方向水平转 90°（右只往右、左只往左），停在收拍的位置",
              en: "Turn 90° the forehand way (right one to the right, left one to the left) and stop at the finish", who: .single,
              target: .rotate(.worldUp, degrees: -90, from: "1-start", mirror: true)),
@@ -97,9 +97,9 @@ struct ControllerTestFlow {
         let (x, y, z): (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>)
         switch hold {
         case .flat: (x, y, z) = (SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1))
-        // 桌球握法（11-27 使用者定：连接边 / 滑轨朝下）。滑轨在右只 −X、左只 +X 那侧，所以右只 X 朝上、左只 X 朝下；
-        //   摇杆那头朝人：右只顶端（摇杆在下半）朝前，左只顶端（摇杆在上半）朝人；两只按键面都朝左
-        case .paddle: (x, y, z) = right ? (SIMD3(0, 0, 1), SIMD3(0, 1, 0), SIMD3(-1, 0, 0)) : (SIMD3(0, 0, -1), SIMD3(0, -1, 0), SIMD3(-1, 0, 0))
+        // 桌球握法（11-27 使用者定：连接边 / 滑轨朝下，两只的摇杆朝向对方）。滑轨在右只 −X、左只 +X 那侧，所以右只 X 朝上、左只 X 朝下；
+        //   按键面右只朝左、左只朝右；这样两只的顶端（肩键那头，+Y）都朝前
+        case .paddle: (x, y, z) = right ? (SIMD3(0, 0, 1), SIMD3(0, 1, 0), SIMD3(-1, 0, 0)) : (SIMD3(0, 0, -1), SIMD3(0, 1, 0), SIMD3(1, 0, 0))
         // 拳击握法：顶端朝上，按键面朝向另一只（右只朝左、左只朝右）
         case .boxing: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)) : (SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(1, 0, 0))
         // 把手握法（11-27 使用者定）：横拿，左只 ZL 那头（顶端 +Y）在右、右只 ZR 那头在左，摇杆（按键面）都朝下；两只的滑轨都朝前
@@ -115,7 +115,7 @@ struct ControllerTestFlow {
         switch axis {
         case .worldUp: a = up
         // 远端往下：远端的水平方向 f，绕 f × 上 转负角（f 朝前时就是绕「右」转 −90°）
-        case .farEndTip: a = simd_normalize(simd_cross(horizontal(start.act(SIMD3(0, right ? 1 : -1, 0))), up))
+        case .farEndTip: a = simd_normalize(simd_cross(horizontal(start.act(SIMD3(0, 1, 0))), up))
         // 往右倾：绕人的前方转正角（顶端往右）
         case .faceForward: a = horizontal(start.act(SIMD3(right ? -1 : 1, 0, 0)))
         case .bodyLong: a = start.act(SIMD3(0, right ? 1 : -1, 0))   // 绕远端方向（右只 +Y、左只 −Y）：同一个角度左右只翻的方向一样

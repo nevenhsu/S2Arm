@@ -164,8 +164,10 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertLessThan(ControllerTestFlow.angle(poses[2], poses[0]), 0.01)
         XCTAssertLessThan(ControllerTestFlow.angle(poses[4], poses[0]), 0.01)
         XCTAssertGreaterThan(poses[1].act(SIMD3(0, 1, 0)).x, 0.99)
-        // 左只正手往左转：转完远端（左只 −Y）朝左
-        XCTAssertLessThan(flow.illustration(side: "L")[1].act(SIMD3(0, -1, 0)).x, -0.99)
+        // 左只正手往左转：转完远端（+Y）朝左；起始时两只的按键面朝向对方
+        XCTAssertLessThan(flow.illustration(side: "L")[1].act(SIMD3(0, 1, 0)).x, -0.99)
+        XCTAssertGreaterThan(flow.illustration(side: "L")[0].act(SIMD3(0, 0, 1)).x, 0.99)
+        XCTAssertLessThan(poses[0].act(SIMD3(0, 0, 1)).x, -0.99)
         XCTAssertTrue(flow.steps.allSatisfy { $0.who == .single })
         // 一对：往左倾从立直算，跟往右倾差 90°
         let pair = ControllerTestFlow.joyConPair
@@ -241,9 +243,9 @@ final class ControllerTestModelTests: XCTestCase {
                 let b = ControllerTestFlow.rotated(yaw * start, axis, degrees: deg, side: side)
                 XCTAssertLessThan(ControllerTestFlow.angle(yaw * a, b), 0.01, "\(hold) \(axis) \(side)")
             }
-            // 远端往下压：远端（右只 +Y、左只 −Y）转到朝下
+            // 远端往下压：远端（+Y）转到朝下
             let tipped = ControllerTestFlow.rotated(yaw * ControllerTestFlow.pose(.paddle, side: side), .farEndTip, degrees: -90, side: side)
-            XCTAssertLessThan(tipped.act(SIMD3(0, side == "L" ? -1 : 1, 0)).z, -0.99)
+            XCTAssertLessThan(tipped.act(SIMD3(0, 1, 0)).z, -0.99)
             // 往右倾：顶端（+Y）往人的右边倒（标准姿态下就是世界 +X）
             let leaned = ControllerTestFlow.rotated(ControllerTestFlow.pose(.boxing, side: side), .faceForward, degrees: 45, side: side)
             XCTAssertGreaterThan(leaned.act(SIMD3(0, 1, 0)).x, 0.7)
