@@ -158,15 +158,11 @@ struct ControllerTestPanelView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 TestLabel(SimText.pick("步驟", "步骤", "Steps"))
                 Spacer()
-                if !hub.customSteps.isEmpty {
-                    Picker("", selection: $hub.useCustom) {
-                        Text(ControllerTestFlow.joyCon.title).tag(false)
-                        Text("steps.json").tag(true)
-                    }
-                    .labelsHidden().fixedSize()
-                } else {
-                    Text(flow.title).font(.system(size: 11)).foregroundStyle(.tertiary)
+                Picker("", selection: $hub.flowID) {
+                    ForEach(ControllerTestFlow.builtIn, id: \.id) { Text($0.title).tag($0.id) }
+                    if !hub.customSteps.isEmpty { Text("steps.json").tag("custom") }
                 }
+                .labelsHidden().fixedSize().disabled(hub.running)
                 // 开始 / 停止放在步骤上面（同时录制）
                 Button { hub.toggleRun() } label: {
                     HStack(spacing: 4) {

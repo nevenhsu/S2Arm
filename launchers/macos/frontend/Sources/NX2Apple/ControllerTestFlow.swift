@@ -11,14 +11,14 @@ import simd
 
 struct ControllerTestFlow {
     enum Who: Equatable { case single, pair }
-    enum Hold: Equatable { case flat, paddle, boxing }
+    enum Hold: Equatable { case flat, paddle, boxing, handlebar }
     /// 转轴：worldUp 跟水平朝向无关；其余按手柄自己的方向定（水平朝向没有绝对参考，世界的「前 / 右」不一定是人的前 / 右）
     ///   farEndTip = 远端那头往下压的轴（右只远端 +Y、左只远端 −Y，横握时摇杆那头朝人）；faceForward = 拳击握法时人的前方（右只 −X、左只 +X）为轴
     enum Axis: Equatable { case worldUp, farEndTip, faceForward, bodyLong }
     enum Target: Equatable {
         case hold(Hold)
-        /// 从某一步做完时的姿态（from = 那一步的 id；nil = 上一步做完 / 这一步开始时）绕轴转几度
-        case rotate(Axis, degrees: Double, from: String? = nil)
+        /// 从某一步做完时的姿态（from = 那一步的 id；nil = 上一步做完 / 这一步开始时）绕轴转几度；only = 只有这一边（L / R）转，另一边留在 from
+        case rotate(Axis, degrees: Double, from: String? = nil, only: String? = nil)
         /// 回到某一步做完时的姿态
         case back(to: String)
         case manual   // steps.json 的步骤：没有目标，手动下一步
@@ -35,8 +35,9 @@ struct ControllerTestFlow {
     let steps: [Step]
     var title: String { SimText.pick(hant, hans, en) }
 
-    /// 内建：先单只 Joy-Con 2（起始姿势「横握・立」，回起始姿势只在下一个动作前需要时出现一次），再一对（每次倾斜都从立直算，不另加「回正」）
-    static let joyCon = ControllerTestFlow(id: "joycon", hant: "Joy-Con 標準測試", hans: "Joy-Con 标准测试", en: "Joy-Con standard test", steps: [
+    /// 内建两套，单只、一对分开测（测到一半不用去手柄面板改分配）。面板按选的手柄自动换到对应那套
+    /// 单只 Joy-Con 2：起始姿势「横握・立」，回起始姿势只在下一个动作前需要时出现一次
+    static let joyConSingle = ControllerTestFlow(id: "joycon-single", hant: "Joy-Con 單只測試", hans: "Joy-Con 单只测试", en: "Joy-Con single test", steps: [
         Step(id: "1-start", hant: "橫握・立：側邊朝下立起來，搖桿那頭朝向你", hans: "横握・立：侧边朝下立起来，摇杆那头朝向你",
              en: "Sideways, standing on its edge, stick end toward you", who: .single, target: .hold(.paddle)),
         Step(id: "2-forehand", hant: "往右轉 90°，停在正手揮拍收拍的位置", hans: "往右转 90°，停在正手挥拍收拍的位置",
@@ -45,11 +46,25 @@ struct ControllerTestFlow {
         Step(id: "4-face-right", hant: "按鍵面往右翻 90°", hans: "按键面往右翻 90°", en: "Roll the button face 90° to the right", who: .single, target: .rotate(.bodyLong, degrees: 90, from: "1-start")),
         Step(id: "5-start", hant: "回到起始姿勢", hans: "回到起始姿势", en: "Back to the start pose", who: .single, target: .back(to: "1-start")),
         Step(id: "6-tip-down", hant: "前端往下壓 90°", hans: "前端往下压 90°", en: "Tip the far end down 90°", who: .single, target: .rotate(.farEndTip, degrees: -90, from: "1-start")),
-        Step(id: "7-boxing", hant: "換成一對：左右手各拿一只立起來（拳擊握法），按鍵面朝向彼此", hans: "换成一对：左右手各拿一只立起来（拳击握法），按键面朝向彼此",
-             en: "Now the pair: one in each hand, upright (boxing grip), button faces toward each other", who: .pair, target: .hold(.boxing)),
-        Step(id: "8-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "7-boxing")),
-        Step(id: "9-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "7-boxing")),
     ])
+    /// 一对 Joy-Con 2：每次倾斜都从立直算，不另加「回正」
+    static let joyConPair = ControllerTestFlow(id: "joycon-pair", hant: "Joy-Con 一對測試", hans: "Joy-Con 一对测试", en: "Joy-Con pair test", steps: [
+        Step(id: "1-boxing", hant: "左右手各拿一只立起來（拳擊握法），按鍵面朝向彼此", hans: "左右手各拿一只立起来（拳击握法），按键面朝向彼此",
+             en: "One in each hand, upright (boxing grip), button faces toward each other", who: .pair, target: .hold(.boxing)),
+        Step(id: "2-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "1-boxing")),
+        Step(id: "3-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "1-boxing")),
+        // 把手握法：两只横拿当左右把手（按键面朝上、顶端朝外），像转把手一样一起左右转，右手那只往自己方向转是加油门
+        Step(id: "4-handlebar", hant: "兩手各橫拿一只當把手：按鍵面朝上，左右排開", hans: "两手各横拿一只当把手：按键面朝上，左右排开",
+             en: "Hold one sideways in each hand like handlebars: buttons up, spread left and right", who: .pair, target: .hold(.handlebar)),
+        Step(id: "5-steer-left", hant: "像轉把手一樣，兩只一起往左轉 30°", hans: "像转把手一样，两只一起往左转 30°", en: "Turn both 30° left, like steering handlebars",
+             who: .pair, target: .rotate(.worldUp, degrees: 30, from: "4-handlebar")),
+        Step(id: "6-steer-right", hant: "兩只一起往右轉 30°（從正前方算）", hans: "两只一起往右转 30°（从正前方算）", en: "Turn both 30° right (from straight ahead)",
+             who: .pair, target: .rotate(.worldUp, degrees: -30, from: "4-handlebar")),
+        Step(id: "7-twist", hant: "回正前方，右手那只往自己的方向轉 45°（像轉油門），左手那只不動", hans: "回正前方，右手那只往自己的方向转 45°（像转油门），左手那只不动",
+             en: "Back to straight ahead, then twist the right one 45° toward you (like a throttle); keep the left one still",
+             who: .pair, target: .rotate(.bodyLong, degrees: 45, from: "4-handlebar", only: "R")),
+    ])
+    static let builtIn = [joyConSingle, joyConPair]
 
     /// steps.json（临时流程，盖过内建）：只有文字，手动下一步
     static func custom(_ steps: [ControllerTestStep]) -> ControllerTestFlow {
@@ -65,6 +80,7 @@ struct ControllerTestFlow {
         case .flat: return SIMD3(0, 0, 1)
         case .paddle: return SIMD3(-1, 0, 0)
         case .boxing: return SIMD3(0, 1, 0)
+        case .handlebar: return SIMD3(0, 0, 1)
         }
     }
     /// 固定姿势的完整姿态（画淡色模型用；水平朝向之后会跟手上那只对齐）。side：L / R
@@ -78,6 +94,8 @@ struct ControllerTestFlow {
         case .paddle: (x, y, z) = right ? (SIMD3(0, 0, -1), SIMD3(0, 1, 0), SIMD3(1, 0, 0)) : (SIMD3(0, 0, -1), SIMD3(0, -1, 0), SIMD3(-1, 0, 0))
         // 拳击握法：顶端朝上，按键面朝向另一只（右只朝左、左只朝右）
         case .boxing: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)) : (SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(1, 0, 0))
+        // 把手握法：按键面朝上，顶端（肩键那头）朝外：右只朝右、左只朝左；两只的滑轨都朝前
+        case .handlebar: (x, y, z) = right ? (SIMD3(0, -1, 0), SIMD3(1, 0, 0), SIMD3(0, 0, 1)) : (SIMD3(0, 1, 0), SIMD3(-1, 0, 0), SIMD3(0, 0, 1))
         }
         return simd_quatd(simd_double3x3(x, y, z))
     }
@@ -118,7 +136,9 @@ struct ControllerTestFlow {
         for step in steps {
             switch step.target {
             case let .hold(hold): current = Self.pose(hold, side: side)
-            case let .rotate(axis, degrees, from): current = Self.rotated(from.flatMap { ends[$0] } ?? current, axis, degrees: degrees, side: side)
+            case let .rotate(axis, degrees, from, only):
+                let base = from.flatMap { ends[$0] } ?? current
+                current = only.map { $0 == side } ?? true ? Self.rotated(base, axis, degrees: degrees, side: side) : base
             case let .back(to): current = ends[to] ?? current
             case .manual: break
             }

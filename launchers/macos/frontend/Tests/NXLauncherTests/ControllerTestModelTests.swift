@@ -149,21 +149,31 @@ final class ControllerTestModelTests: XCTestCase {
 
     /// 内建流程每一步都有目标姿态（示意图），回起始姿势那几步跟第 1 步一样；右只往右转后顶端指向右边
     func testFlowIllustrations() {
-        let flow = ControllerTestFlow.joyCon
+        let flow = ControllerTestFlow.joyConSingle
         XCTAssertFalse(flow.steps.contains { $0.target == .manual })
         let poses = flow.illustration(side: "R")
         XCTAssertEqual(poses.count, flow.steps.count)
         XCTAssertLessThan(ControllerTestFlow.angle(poses[2], poses[0]), 0.01)
         XCTAssertLessThan(ControllerTestFlow.angle(poses[4], poses[0]), 0.01)
         XCTAssertGreaterThan(poses[1].act(SIMD3(0, 1, 0)).x, 0.99)
-        // 往左倾从立直算：跟往右倾差 90°
-        XCTAssertEqual(ControllerTestFlow.angle(poses[7], poses[8]), 90, accuracy: 0.1)
+        XCTAssertTrue(flow.steps.allSatisfy { $0.who == .single })
+        // 一对：往左倾从立直算，跟往右倾差 90°
+        let pair = ControllerTestFlow.joyConPair
+        XCTAssertTrue(pair.steps.allSatisfy { $0.who == .pair })
+        let pairPoses = pair.illustration(side: "R")
+        XCTAssertEqual(ControllerTestFlow.angle(pairPoses[1], pairPoses[2]), 90, accuracy: 0.1)
+        // 把手握法：一起左右转差 60°；转油门只有右只动，左只留在把手姿势；右只顶端往自己方向转 = 按键面转向人（世界 −Y）
+        let leftPoses = pair.illustration(side: "L")
+        XCTAssertEqual(ControllerTestFlow.angle(pairPoses[4], pairPoses[5]), 60, accuracy: 0.1)
+        XCTAssertLessThan(ControllerTestFlow.angle(leftPoses[6], leftPoses[3]), 0.01)
+        XCTAssertEqual(ControllerTestFlow.angle(pairPoses[6], pairPoses[3]), 45, accuracy: 0.1)
+        XCTAssertLessThan(pairPoses[6].act(SIMD3(0, 0, 1)).y, -0.6)
     }
 
     /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤画右只，一对的画左右两只
     @MainActor func testRenderFlowSheet() throws {
         guard let out = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER"] else { throw XCTSkip("S2A_FLOW_RENDER 没设") }
-        let flow = ControllerTestFlow.joyCon
+        let flow = ControllerTestFlow(id: "all", hant: "", hans: "", en: "", steps: ControllerTestFlow.joyConSingle.steps + ControllerTestFlow.joyConPair.steps)
         let right = flow.illustration(side: "R"), left = flow.illustration(side: "L")
         let cell = NSSize(width: 300, height: 230), cols = 3
         let rows = (flow.steps.count + cols - 1) / cols
@@ -193,7 +203,7 @@ final class ControllerTestModelTests: XCTestCase {
             let col = i % cols, row = i / cols
             let origin = NSPoint(x: CGFloat(col) * cell.width, y: sheet.size.height - CGFloat(row + 1) * cell.height)
             let items: [(PoseView.Shape, simd_quatd, CGFloat)] = step.who == .pair
-                ? [(.joyConLeft, left[i], -0.035), (.joyConRight, right[i], 0.035)] : [(.joyConRight, right[i], 0)]
+                ? [(.joyConLeft, left[i], -0.06), (.joyConRight, right[i], 0.06)] : [(.joyConRight, right[i], 0)]
             render(items).draw(in: NSRect(x: origin.x + 4, y: origin.y + 40, width: cell.width - 8, height: cell.height - 44))
             let text = "\(i + 1). " + step.hant + "\n" + step.en
             (text as NSString).draw(in: NSRect(x: origin.x + 8, y: origin.y + 2, width: cell.width - 16, height: 38),

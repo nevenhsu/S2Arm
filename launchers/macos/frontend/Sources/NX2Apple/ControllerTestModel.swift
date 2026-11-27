@@ -283,6 +283,10 @@ struct ControllerTestStep: Equatable {
         releaseMotionPad()
         shownTargetID = selected?.id
         stepStarts = [:]; matchedSince = nil
+        // 换手柄：没在测时自动换成合的那套（一对 → 一对测试、单只 Joy-Con → 单只测试；steps.json 不动）
+        if !running, flowID != "custom", let target = selected {
+            if target.isPair { flowID = ControllerTestFlow.joyConPair.id } else if target.joyConSide != nil { flowID = ControllerTestFlow.joyConSingle.id }
+        }
         guard let target = selected else { channels = []; return }
         switch target.kind {
         case let .relay(_, shape):
@@ -373,8 +377,12 @@ struct ControllerTestStep: Equatable {
 
     // —— 步骤：内建流程（文字 + 淡色目标模型，对上停住 1 秒自动下一步），steps.json 有就多一个「临时流程」可选 ——
     @Published private(set) var customSteps: [ControllerTestStep] = []
-    @Published var useCustom = false { didSet { if useCustom != oldValue { stopRun(); restartFlow() } } }   // 换流程：停掉这一轮
-    var flow: ControllerTestFlow { useCustom && !customSteps.isEmpty ? .custom(customSteps) : .joyCon }
+    /// 选哪套流程：内建单只 / 一对（选手柄时自动换成合的那套），或 "custom" = steps.json
+    @Published var flowID = ControllerTestFlow.joyConSingle.id { didSet { if flowID != oldValue { stopRun(); restartFlow() } } }   // 换流程：停掉这一轮
+    var flow: ControllerTestFlow {
+        if flowID == "custom", !customSteps.isEmpty { return .custom(customSteps) }
+        return ControllerTestFlow.builtIn.first { $0.id == flowID } ?? .joyConSingle
+    }
     @Published private(set) var stepIndex = 0
     private(set) var stepStartedAt: Double = 0
     /// 每一步开始时各边的姿态（原始读数那份）：相对转动 / 回去的目标从这里算
@@ -390,7 +398,7 @@ struct ControllerTestStep: Equatable {
         let next = stamp == nil ? [] : (try? Data(contentsOf: url)).flatMap(ControllerTestStep.parse) ?? []
         guard next != customSteps else { return }
         customSteps = next
-        if useCustom { if next.isEmpty { useCustom = false } else { restartFlow() } }
+        if flowID == "custom" { if next.isEmpty { flowID = ControllerTestFlow.joyConSingle.id } else { restartFlow() } }
     }
     func restartFlow() { goTo(0) }
     /// 按「開始」才跑流程：示意模型、对上自动下一步、录制都在开始之后（11-27：没按开始，平放着的手柄就被当成第 1 步对上、自己往下走）
@@ -446,8 +454,9 @@ struct ControllerTestStep: Equatable {
         let side = channel.side
         switch step.target {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
-        case let .rotate(axis, degrees, from):
+        case let .rotate(axis, degrees, from, only):
             guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
+            if let only, only != side { return base }   // 只有另一边转：这一边留在原处
             return ControllerTestFlow.rotated(base, axis, degrees: degrees, side: side)
         // 从中间某一步开始、那一步还没做过：用标准示意姿态（水平朝向跟着手上那只）
         case let .back(to): return endPose(of: to, side: side) ?? ControllerTestFlow.yawAligned(flow.illustration(side: side)[stepIndex], to: channel.rawPose.q)
