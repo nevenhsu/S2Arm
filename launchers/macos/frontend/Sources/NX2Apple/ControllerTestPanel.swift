@@ -167,15 +167,20 @@ struct ControllerTestPanelView: View {
                 } else {
                     Text(flow.title).font(.system(size: 11)).foregroundStyle(.tertiary)
                 }
-                Button(SimText.pick("從頭", "从头", "Restart")) { hub.restartFlow() }
             }
             HStack(spacing: 8) {
                 Text("\(hub.stepIndex + 1) / \(flow.steps.count)").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
                 VStack(alignment: .leading, spacing: 4) {
                     Text(step?.text ?? "").font(.system(size: 13, weight: .medium)).fixedSize(horizontal: false, vertical: true)
-                    if let step, step.target != .manual {
+                    if !hub.running {
+                        Text(hub.finished ? SimText.pick("測完了，讀數已存好（路徑在下面）。再測一次：選好步驟按「開始」", "测完了，读数已存好（路径在下面）。再测一次：选好步骤按「开始」", "Done; readings saved (path below). To run again, pick a step and press Start")
+                                          : SimText.pick("用上一步 / 下一步選從哪一步開始，按「開始」：才出現淺藍色示意模型、對上自動下一步，同時錄下讀數",
+                                                         "用上一步 / 下一步选从哪一步开始，按「开始」：才出现浅蓝色示意模型、对上自动下一步，同时录下读数",
+                                                         "Use Back / Next to pick the first step, then press Start: the pale blue model appears, steps advance when you match it, and readings are recorded"))
+                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else if let step, step.target != .manual {
                         if hub.stepFitsSelection {
-                            Text(SimText.pick("對準淺色的模型，停住 1 秒自動下一步", "对准浅色的模型，停住 1 秒自动下一步", "Match the pale model and hold still for 1 s to advance"))
+                            Text(SimText.pick("對準淺藍色的模型，停住 1 秒自動下一步", "对准浅蓝色的模型，停住 1 秒自动下一步", "Match the pale blue model and hold still for 1 s to advance"))
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                             ProgressView(value: hub.holdProgress).progressViewStyle(.linear).frame(maxWidth: 160)
                         } else {
@@ -195,13 +200,13 @@ struct ControllerTestPanelView: View {
         }
     }
 
-    // —— 录制 ——
+    // —— 开始 / 停止（同时录制）——
     private var recordSection: some View {
         HStack(spacing: 8) {
-            Button { hub.toggleRecording() } label: {
+            Button { hub.toggleRun() } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: hub.isRecording ? "stop.fill" : "circle.fill").foregroundStyle(.red)
-                    Text(hub.isRecording ? SimText.pick("停止", "停止", "Stop") : SimText.pick("錄製", "录制", "Record"))
+                    Image(systemName: hub.running ? "stop.fill" : "play.fill").foregroundStyle(hub.running ? Color.red : Color.green)
+                    Text(hub.running ? SimText.pick("停止", "停止", "Stop") : SimText.pick("開始", "开始", "Start"))
                 }
             }
             if hub.isRecording {
@@ -345,6 +350,7 @@ struct PoseView: NSViewRepresentable {
         let world = SCNNode()
         let device = SCNNode()
         let ghost = SCNNode()
+        var shownGhost: simd_quatd?   // 淡色模型现在画的姿态：换步骤时转过去，不直接跳
         var dots: [SCNNode] = []
         var shape: Shape?
         var tint: ControllerTint?
@@ -398,10 +404,13 @@ struct PoseView: NSViewRepresentable {
         }
         let q = pose.q
         c.device.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
-        if let g = ghost {
+        if let target = ghost {
+            // 每次画往目标转 25%（面板约 30 次 / 秒刷新：约 0.3 秒转到位）；刚出现直接放上
+            let g = c.shownGhost.map { simd_slerp($0, target, 0.25) } ?? target
+            c.shownGhost = g
             c.ghost.isHidden = false
             c.ghost.simdOrientation = simd_quatf(ix: Float(g.imag.x), iy: Float(g.imag.y), iz: Float(g.imag.z), r: Float(g.real))
-        } else { c.ghost.isHidden = true }
+        } else { c.ghost.isHidden = true; c.shownGhost = nil }
         // 轨迹：最多 48 点，旧的淡
         let step = max(1, trail.count / c.dots.count)
         let picked = stride(from: trail.count - 1, through: 0, by: -step).prefix(c.dots.count).map { trail[$0] }

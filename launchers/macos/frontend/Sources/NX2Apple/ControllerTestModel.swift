@@ -248,7 +248,7 @@ struct ControllerTestStep: Equatable {
     func panelClosed() {
         open = false
         timer?.invalidate(); timer = nil
-        stopRecording()
+        stopRun()
         releaseMotionPad()
     }
 
@@ -365,7 +365,7 @@ struct ControllerTestStep: Equatable {
 
     // —— 步骤：内建流程（文字 + 淡色目标模型，对上停住 1 秒自动下一步），steps.json 有就多一个「临时流程」可选 ——
     @Published private(set) var customSteps: [ControllerTestStep] = []
-    @Published var useCustom = false { didSet { if useCustom != oldValue { restartFlow() } } }
+    @Published var useCustom = false { didSet { if useCustom != oldValue { stopRun(); restartFlow() } } }   // 换流程：停掉这一轮
     var flow: ControllerTestFlow { useCustom && !customSteps.isEmpty ? .custom(customSteps) : .joyCon }
     @Published private(set) var stepIndex = 0
     private(set) var stepStartedAt: Double = 0
@@ -385,6 +385,22 @@ struct ControllerTestStep: Equatable {
         if useCustom { if next.isEmpty { useCustom = false } else { restartFlow() } }
     }
     func restartFlow() { goTo(0) }
+    /// 按「開始」才跑流程：示意模型、对上自动下一步、录制都在开始之后（11-27：没按开始，平放着的手柄就被当成第 1 步对上、自己往下走）
+    @Published private(set) var running = false
+    @Published private(set) var finished = false
+    func toggleRun() { if running { stopRun() } else { startRun() } }
+    /// 从现在选的这一步开始（上一步 / 下一步先选好，不强制从第 1 步）
+    func startRun() {
+        finished = false
+        goTo(stepIndex)
+        running = true
+        startRecording()
+    }
+    func stopRun() {
+        running = false
+        matchedSince = nil
+        stopRecording()
+    }
     func step(_ delta: Int) { goTo(stepIndex + delta) }
     private func goTo(_ index: Int) {
         stepIndex = max(0, min(flow.steps.count - 1, index))
@@ -410,14 +426,15 @@ struct ControllerTestStep: Equatable {
     }
     /// 这一边这一步的目标姿态（淡色模型）；没有目标 / 还没有姿态就 nil
     func ghost(for channel: Channel) -> simd_quatd? {
-        guard let step, stepFitsSelection, channel.rawPose.started else { return nil }
+        guard running, let step, stepFitsSelection, channel.rawPose.started else { return nil }
         let side = channel.side
         switch step.target {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
         case let .rotate(axis, degrees, from):
             guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
             return ControllerTestFlow.rotated(base, axis, degrees: degrees)
-        case let .back(to): return endPose(of: to, side: side)
+        // 从中间某一步开始、那一步还没做过：用标准示意姿态（水平朝向跟着手上那只）
+        case let .back(to): return endPose(of: to, side: side) ?? ControllerTestFlow.yawAligned(flow.illustration(side: side)[stepIndex], to: channel.rawPose.q)
         case .manual: return nil
         }
     }
@@ -434,7 +451,7 @@ struct ControllerTestStep: Equatable {
         return min(1, (ProcessInfo.processInfo.systemUptime - since) / ControllerTestFlow.holdSeconds)
     }
     private func checkStep(now: Double) {
-        guard let step, step.target != .manual, stepFitsSelection, !channels.isEmpty else { matchedSince = nil; return }
+        guard running, let step, step.target != .manual, stepFitsSelection, !channels.isEmpty else { matchedSince = nil; return }
         // 开始姿态还没记到（刚选手柄 / 读数刚来）：现在补记
         if stepStarts[stepIndex]?.count != channels.filter(\.rawPose.started).count {
             var starts = stepStarts[stepIndex] ?? [:]
@@ -443,7 +460,8 @@ struct ControllerTestStep: Equatable {
         }
         guard channels.allSatisfy(matches) else { matchedSince = nil; return }
         if matchedSince == nil { matchedSince = now }
-        if now - matchedSince! >= ControllerTestFlow.holdSeconds, stepIndex < flow.steps.count - 1 { goTo(stepIndex + 1) }
+        guard now - matchedSince! >= ControllerTestFlow.holdSeconds else { return }
+        if stepIndex < flow.steps.count - 1 { goTo(stepIndex + 1) } else { finished = true; stopRun(); goTo(0) }   // 最后一步对上：测完、停录
     }
 
     // —— 录制：每次一个文件（时间 + 流程），不盖掉之前的 ——
@@ -455,7 +473,6 @@ struct ControllerTestStep: Equatable {
     private var lastFlush: Double = 0
     var isRecording: Bool { recording != nil }
     @Published private(set) var recordError: String?
-    func toggleRecording() { if recording == nil { startRecording() } else { stopRecording() } }
     nonisolated static func recordName(date: Date, flow: String) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd-HHmmss"
         return "readings-\(f.string(from: date))-\(flow).tsv"
