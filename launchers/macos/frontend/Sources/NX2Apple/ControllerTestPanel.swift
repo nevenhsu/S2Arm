@@ -274,7 +274,7 @@ private struct ChannelColumn: View {
                     Text(PoseText.describe(hub.poseFromGame ? ControllerTestIMU.gameView(s, shape: channel.shape) : s, pose: pose))
                         .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
                 }
-                // 测试中：右上角一张实色示意（标准姿态、固定视角），转动类的步骤从上一个姿态循环转到目标，看得出怎么动
+                // 测试中：右上角一张实色示意 = 淡色模型的目标姿态（同主画面的缺省视角）
                 if let poses = hub.illustration(for: channel) {
                     StepInset(from: poses.from, to: poses.to, shape: hub.shape(for: channel),
                               tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)

@@ -531,12 +531,11 @@ struct ControllerTestStep: Equatable {
         case .pair: return selected?.isPair == true
         }
     }
-    /// 右上角示意图：这一步的标准目标姿态；转动 / 回去类的步骤附上前一步的标准姿态（示意从那里转过来）。没开始 / 手柄不合这一步就 nil
-    ///   跟淡色模型同一个目标（11-27：原来画标准姿态、水平朝向跟手上的不一样，跟淡色模型对不上）；转动 / 回去类的从这一步开始时的姿态循环转过去
+    /// 右上角示意图：没开始 / 手柄不合这一步就 nil
+    ///   就是淡色模型的那个目标姿态，静止不动（11-27：画标准姿态时水平朝向对不上；从开始姿态循环转过去时，看到的常是开始姿态，也对不上）
     func illustration(for channel: Channel) -> (from: simd_quatd?, to: simd_quatd)? {
-        guard let step, let target = ghost(for: channel) else { return nil }
-        if case .hold = step.target { return (nil, target) }
-        return (stepStarts[stepIndex]?[channel.side], target)
+        guard let target = ghost(for: channel) else { return nil }
+        return (nil, target)
     }
     /// 某一步做完时的姿态 = 下一步开始时记下的
     private func endPose(of id: String, side: String) -> simd_quatd? {
