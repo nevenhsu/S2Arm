@@ -111,6 +111,12 @@ struct LauncherPadRepeater {
         let n = Int(s2a_launcher_hid_read(&out, Int32(out.count)))
         return Array(out.prefix(max(0, n)))
     }
+    /// 手柄测试面板（开发工具，ControllerTestPanel）：开着时同一条连接开体感，每拍把排着的六轴交给它（连接程序一次只服务一个客户端，面板不另开连接）
+    var motionWanted: () -> Bool = { false }
+    var receiveMotion: ([s2a_launcher_pad_motion]) -> Void = { _ in }
+    private var motionSent = false
+    /// 现在连着连接程序（面板显示读数来源状态用）
+    var relayOpen: Bool { client != nil }
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var client: OpaquePointer?
@@ -158,7 +164,7 @@ struct LauncherPadRepeater {
     }
     func releaseRelay() {
         if let client { s2a_launcher_pad_close(client) }
-        client = nil; relay = .init(); repeater.reset(); token = ""
+        client = nil; relay = .init(); repeater.reset(); token = ""; motionSent = false
         refreshPresentation()
     }
     /// Connection notifications can precede the system enumeration (or remove
@@ -205,7 +211,14 @@ struct LauncherPadRepeater {
                 client = path.withCString { s2a_launcher_pad_open($0) }; retryAt = now + 1
             }
             if let client {
+                let want = motionWanted()
+                if want != motionSent, s2a_launcher_pad_set_motion(client, want ? 1 : 0) == 0 { motionSent = want }
                 let result = s2a_launcher_pad_poll(client, &relay)
+                if motionSent {
+                    var batch = [s2a_launcher_pad_motion](repeating: .init(), count: 128)
+                    let n = Int(s2a_launcher_pad_motion_drain(client, &batch, Int32(batch.count)))
+                    if n > 0 { receiveMotion(Array(batch.prefix(n))) }
+                }
                 if result < 0 { releaseRelay(); retryAt = now + 1 }
                 else if result > 0 { lastPacketAt = now }
                 else if relay.ready != 0, now - lastPacketAt > 0.25 { relay = .init() }

@@ -422,7 +422,14 @@ extension LauncherView {
         navigation.defaultFocus = { showingHome ? homeSelected.map { "card." + $0.id } : nil }
         navigation.context = { showingHome ? "home" : model.showsWelcome ? "welcome" : "job.\((model.playVisible ? "play" : nil) ?? model.exportFor ?? model.session?.kind.rawValue ?? "")" }
         navigation.source.relayPath = { model.controller.phase == .ready && !model.controller.assigning ? model.controller.socketURL.path : nil }
-        navigation.source.relayAllowed = { !model.playSessionActive && !model.controller.assigning }
+        navigation.source.relayAllowed = { !model.playSessionActive && !model.controller.assigning && !ControllerTestHub.shared.blocksRelay }
+        if ControllerTestHub.allowed {   // 手柄测试面板（本地 / 自测构建）：同一条连接顺带要体感读数
+            let hub = ControllerTestHub.shared
+            hub.source = navigation.source
+            hub.gameRunning = { model.playSessionActive }
+            navigation.source.motionWanted = { hub.wantsRelayMotion }
+            navigation.source.receiveMotion = { hub.receive($0) }
+        }
         navigation.source.relayConnected = { model.controller.deviceCount > 0 }
         navigation.source.assignment = { model.controller.assignment }
         navigation.source.faceMapping = { model.controller.faceMaps.mapping(for: $0) }

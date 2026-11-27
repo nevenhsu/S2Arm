@@ -814,7 +814,7 @@ private struct ControllerToolbarButton: View {
         //   先没连、面板里连上（多出玩家区块）后再开齿轮选单 / 改开关，面板内容上下被裁（11-16，真窗口单测重现不出来）。
         //   高度照内容自动撑（NSHostingController.sizingOptions = .preferredContentSize），不写死
         // 开着「模擬手把」面板（本地 / 自测构建的开发工具）时，点面板外面不收手柄面板，方便两个对着测；点手柄钮 / 按 B 照常收
-        .background(AppKitPopover(isPresented: $show, stayOpen: { ControllerSimulatorPanel.isOpen }) {
+        .background(AppKitPopover(isPresented: $show, stayOpen: { ControllerSimulatorPanel.isOpen || ControllerTestPanel.isOpen }) {
             Switch2ProConnectionPopover(controller: controller, systems: systems, lang: lang, onClose: { show = false })
                 .environment(\.padControls, padControls)
         })
@@ -822,6 +822,7 @@ private struct ControllerToolbarButton: View {
         .onReceive(systems.$pads.combineLatest(systems.$hidNames)) { pads, hid in controller.updateSystem(SystemControllers.assignmentKeys(pads: pads, hidNames: hid)) }
         .onReceive(controller.$assignment) { systems.applyPlayerLights($0) }
         .onAppear {   // 模拟手柄（本地 / 自测构建）：按键送进分配；Joy-Con 2 连上 / 断开要重对分配（一代走 systems 的表，上面两行已接）
+            if ControllerTestHub.allowed { ControllerTestHub.shared.controller = controller; ControllerTestHub.shared.systems = systems }   // 手柄测试面板列同一份清单
             guard ControllerColorSimulator.allowed, ControllerColorSimulator.shared.controller == nil else { return }   // 只接一次（onAppear 会来好几次）
             let target = controller
             ControllerColorSimulator.shared.controller = target

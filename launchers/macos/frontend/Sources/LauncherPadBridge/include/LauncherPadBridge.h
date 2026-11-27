@@ -33,6 +33,21 @@ s2a_launcher_pad_client *s2a_launcher_pad_open(const char *path);
 int s2a_launcher_pad_poll(s2a_launcher_pad_client *client, s2a_launcher_pad_sample *sample);
 void s2a_launcher_pad_close(s2a_launcher_pad_client *client);
 int s2a_launcher_pad_decode(const void *bytes, size_t length, s2a_launcher_pad_sample *sample);
+// 手柄测试面板（开发工具）：同一条连接顺带要体感读数（连接程序一次只服务一个客户端，不另开连接）。
+//   开了体感后每个 INPUT 包里的六轴原样排进队列（每位玩家都有；一对时 motion 是右只、motion_left 是左只），面板取走
+typedef struct {
+    uint8_t player, kind, side;   // kind = ns2_kind（1 Pro、2 左只、3 右只、4 一对）；side 0 = motion（单只 / Pro / 一对的右只）、1 = motion_left（一对的左只）
+    uint64_t host_timestamp_us;   // 0 = 没有时间戳
+    float ax, ay, az, gx, gy, gz;   // g、度/秒，设备轴序，未转换
+} s2a_launcher_pad_motion;
+// 送 NS2_RELAY_MOTION（enabled 0 / 1）：0 成功，-1 送不出
+int s2a_launcher_pad_set_motion(s2a_launcher_pad_client *client, int enabled);
+// 取走排着的六轴（最旧的先）：返回取到几笔
+int s2a_launcher_pad_motion_drain(s2a_launcher_pad_client *client, s2a_launcher_pad_motion *out, int max);
+// 一个 INPUT 包里的六轴（纯函数，单测）：返回几笔（0–2），-1 = 包不对
+int s2a_launcher_pad_decode_motion(const void *bytes, size_t length, s2a_launcher_pad_motion out[2]);
+// 单测用：按 ns2_relay_packet 的字段摆一个 INPUT 包（m[0] 进 motion，n == 2 时 m[1] 进 motion_left、kind 记成一对）；返回包长
+size_t s2a_launcher_pad_encode_motion_for_test(const s2a_launcher_pad_motion *m, int n, void *out, size_t capacity);
 int s2a_launcher_face_valid(int map);
 int s2a_launcher_face_source(int map, int target);
 uint64_t s2a_launcher_face_apply(uint64_t buttons, int map);
