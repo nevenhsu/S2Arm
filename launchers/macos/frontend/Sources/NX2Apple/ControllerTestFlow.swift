@@ -51,10 +51,12 @@ struct ControllerTestFlow {
     ])
     /// 一对 Joy-Con 2：每次倾斜都从立直算，不另加「回正」
     static let joyConPair = ControllerTestFlow(id: "joycon-pair", hant: "Joy-Con 一對測試", hans: "Joy-Con 一对测试", en: "Joy-Con pair test", steps: [
-        Step(id: "1-upright", hant: "左右手各拿一只立起來，按鍵面朝向彼此", hans: "左右手各拿一只立起来，按键面朝向彼此",
-             en: "One in each hand, upright, button faces toward each other", who: .pair, target: .hold(.upright)),
-        Step(id: "2-lean-right", hant: "兩只一起往右傾 45°", hans: "两只一起往右倾 45°", en: "Lean both 45° to the right", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "1-upright")),
-        Step(id: "3-lean-left", hant: "兩只一起往左傾 45°（從立直算）", hans: "两只一起往左倾 45°（从立直算）", en: "Lean both 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "1-upright")),
+        Step(id: "1-upright", hant: "左右手各握一只立起來：連接面（滑軌）都朝前、ZL / ZR 都朝上", hans: "左右手各握一只立起来：连接面（滑轨）都朝前、ZL / ZR 都朝上",
+             en: "Hold one upright in each hand: rails facing forward, ZL / ZR pointing up", who: .pair, target: .hold(.upright)),
+        Step(id: "2-lean-right", hant: "握著兩只一起往右傾 45°（ZL / ZR 那頭往右倒）", hans: "握着两只一起往右倾 45°（ZL / ZR 那头往右倒）",
+             en: "Holding both, lean them 45° to the right (ZL / ZR ends toward the right)", who: .pair, target: .rotate(.faceForward, degrees: 45, from: "1-upright")),
+        Step(id: "3-lean-left", hant: "握著兩只一起往左傾 45°（從立直算）", hans: "握着两只一起往左倾 45°（从立直算）",
+             en: "Holding both, lean them 45° to the left (from upright)", who: .pair, target: .rotate(.faceForward, degrees: -45, from: "1-upright")),
         // 把手握法：两只横拿当左右把手（左只 ZL 在右、右只 ZR 在左，摇杆朝下），像转把手一样一起左右转，右手那只往自己方向转是加油门
         Step(id: "4-handlebar", hant: "兩手各橫拿一只當把手：左只 ZL 在右、右只 ZR 在左，搖桿都朝下", hans: "两手各横拿一只当把手：左只 ZL 在右、右只 ZR 在左，摇杆都朝下",
              en: "Hold one sideways in each hand like handlebars: left one's ZL end on the right, right one's ZR end on the left, sticks facing down", who: .pair, target: .hold(.handlebar)),

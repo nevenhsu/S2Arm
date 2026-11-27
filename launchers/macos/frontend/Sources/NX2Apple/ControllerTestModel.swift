@@ -537,6 +537,11 @@ struct ControllerTestStep: Equatable {
         guard let target = ghost(for: channel) else { return nil }
         return (nil, target)
     }
+    /// 某一步的标准姿态（示意用的理想动作推出来的），水平朝向对齐手上那只
+    private func standardPose(of id: String, channel: Channel) -> simd_quatd? {
+        guard let i = flow.steps.firstIndex(where: { $0.id == id }) else { return nil }
+        return ControllerTestFlow.yawAligned(flow.illustration(side: channel.side)[i], to: channel.rawPose.q)
+    }
     /// 某一步做完时的姿态 = 下一步开始时记下的
     private func endPose(of id: String, side: String) -> simd_quatd? {
         guard let i = flow.steps.firstIndex(where: { $0.id == id }) else { return nil }
@@ -549,7 +554,16 @@ struct ControllerTestStep: Equatable {
         switch step.target {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
         case let .rotate(axis, degrees, from, only, mirror):
-            guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
+            // 从哪一步算：那一步这一轮做过就用做完时的姿态；没做过（从中间开始）用那一步的标准姿态（水平朝向跟手上那只），
+            //   不用按「开始」那一刻的姿态（11-27：平放着从第 2 步开始，「往右倾」变成按键面往右翻，对不上、卡住）
+            let base: simd_quatd
+            if let from {
+                guard let b = endPose(of: from, side: side) ?? standardPose(of: from, channel: channel) else { return nil }
+                base = b
+            } else {
+                guard let b = stepStarts[stepIndex]?[side] else { return nil }
+                base = b
+            }
             if let only, only != side { return base }   // 只有另一边转：这一边留在原处
             return ControllerTestFlow.rotated(base, axis, degrees: mirror && side == "L" ? -degrees : degrees, side: side)
         // 从中间某一步开始、那一步还没做过：用标准示意姿态（水平朝向跟着手上那只）
