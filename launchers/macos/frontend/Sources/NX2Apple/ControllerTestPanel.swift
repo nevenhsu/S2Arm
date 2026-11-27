@@ -259,9 +259,16 @@ private struct ChannelColumn: View {
             ZStack(alignment: .topLeading) {
                 PoseView(pose: pose, ghost: hub.poseFromGame ? nil : hub.ghost(for: channel), trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
                          shape: hub.shape(for: channel),
-                         tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
+                         tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil, viewReset: hub.viewReset)
                     .frame(height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    // 拖动转过视角后一键回到原来的斜视角（「歸正」是重设手柄的水平朝向，这个只动镜头）
+                    .overlay(alignment: .bottomTrailing) {
+                        Button { hub.viewReset += 1 } label: { AxisGizmo().frame(width: 34, height: 34) }
+                            .buttonStyle(.plain).padding(6)
+                            .help(SimText.pick("視角回正", "视角回正", "Reset view"))
+                            .accessibilityLabel(SimText.pick("視角回正", "视角回正", "Reset view"))
+                    }
                 if let s {
                     Text(PoseText.describe(hub.poseFromGame ? ControllerTestIMU.gameView(s, shape: channel.shape) : s, pose: pose))
                         .font(.system(size: 10)).foregroundStyle(Color(white: 0.43)).padding(8)   // 3D 底是固定浅色：字用固定深灰，深色模式也看得到
@@ -352,8 +359,11 @@ struct PoseView: NSViewRepresentable {
     let trail: [SIMD3<Double>]
     let shape: Shape
     let tint: ControllerTint?
+    var viewReset = 0   // 变了就把镜头放回原来的斜视角（拖动 / 缩放过之后）
 
     final class Coordinator {
+        let camera = SCNNode()
+        var viewReset = 0
         let scene = SCNScene()
         let world = SCNNode()
         let device = SCNNode()
@@ -383,14 +393,12 @@ struct PoseView: NSViewRepresentable {
         floor.geometry?.firstMaterial?.isDoubleSided = true
         floor.position = SCNVector3(0, 0, -0.06)   // 世界坐标的「地板」（Z 往下），在世界节点里不用再转
         c.world.addChildNode(floor)
-        let camera = SCNNode()
+        let camera = c.camera
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 40
         camera.camera?.zNear = 0.01
-        camera.position = SCNVector3(0.1, 0.11, 0.21)
-        camera.look(at: SCNVector3(0, 0, 0))
         c.scene.rootNode.addChildNode(camera)
-        view.pointOfView = camera
+        Self.placeCamera(camera, in: view)
         for i in 0..<48 {
             let dot = SCNNode(geometry: SCNSphere(radius: 0.0022))
             dot.geometry?.firstMaterial?.diffuse.contents = NSColor.systemBlue
@@ -402,8 +410,17 @@ struct PoseView: NSViewRepresentable {
         }
         return view
     }
+    /// 原来的斜视角：屏幕前的人那边偏右、稍高处，看着原点
+    static func placeCamera(_ camera: SCNNode, in view: SCNView) {
+        camera.position = SCNVector3(0.1, 0.11, 0.21)
+        camera.look(at: SCNVector3(0, 0, 0))
+        view.pointOfView = camera
+        view.defaultCameraController.pointOfView = camera
+        view.defaultCameraController.target = SCNVector3(0, 0, 0)
+    }
     func updateNSView(_ view: SCNView, context: Context) {
         let c = context.coordinator
+        if c.viewReset != viewReset { c.viewReset = viewReset; Self.placeCamera(c.camera, in: view) }
         if c.shape != shape || c.tint != tint {
             c.shape = shape; c.tint = tint
             c.device.childNodes.forEach { $0.removeFromParentNode() }
@@ -536,5 +553,23 @@ struct StepInset: NSViewRepresentable {
             q = simd_slerp(from, to, t * t * (3 - 2 * t))
         }
         c.model.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
+    }
+}
+
+/// 视角回正钮：画世界三轴（红 X 右、绿 Y 往屏幕里、蓝 Z 上，照原来的斜视角），点一下镜头回到原来的位置
+private struct AxisGizmo: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let o = CGPoint(x: size.width * 0.42, y: size.height * 0.62), r = size.width * 0.34
+            let axes: [(CGVector, Color, String)] = [(CGVector(dx: 1, dy: 0.3), AxisColor.x, "X"), (CGVector(dx: 0.45, dy: -0.55), AxisColor.y, "Y"), (CGVector(dx: 0, dy: -1), AxisColor.z, "Z")]
+            for (d, color, name) in axes {
+                let end = CGPoint(x: o.x + d.dx * r, y: o.y + d.dy * r)
+                ctx.stroke(Path { $0.move(to: o); $0.addLine(to: end) }, with: .color(color), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                ctx.draw(Text(name).font(.system(size: 8, weight: .bold)).foregroundColor(color), at: CGPoint(x: o.x + d.dx * (r + 5), y: o.y + d.dy * (r + 5)))
+            }
+        }
+        .background(Circle().fill(Color.white.opacity(0.9)))
+        .overlay(Circle().strokeBorder(Color.black.opacity(0.15)))
+        .contentShape(Circle())
     }
 }

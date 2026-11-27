@@ -140,6 +140,8 @@ struct ControllerTestStep: Equatable {
     }
     @Published var selectedID: String? { didSet { if selectedID != oldValue { selectionChanged() } } }
     @Published var poseFromGame = false
+    /// 3D 视角回正（按一下加一，PoseView 看到变了就放回原来的镜头）
+    @Published var viewReset = 0
     /// 面板开着（不开就不读、不开体感）
     private(set) var open = false
 
@@ -484,13 +486,18 @@ struct ControllerTestStep: Equatable {
         guard next != customSteps else { return }
         customSteps = next
         if running { stopRun() }
-        if next.isEmpty { pickFlow() } else if flowID == "custom" { restartFlow() } else { flowID = "custom" }
+        if flowID == "custom" { restartFlow() }
+        pickFlow()
     }
     func restartFlow() { goTo(0) }
     /// 按选的手柄定流程：一对 → 一对测试、其余 → 单只测试；有 steps.json 就用它
+    ///   Joy-Con（单只 / 一对）一律用内建流程（有示意）；steps.json 只给没有内建流程的手柄（Pro、PS、Xbox 等）用
+    ///   （11-27：留着一份旧的 steps.json，Joy-Con 也被它盖掉，测试时看不到示意模型）
     private func pickFlow() {
-        if !customSteps.isEmpty { flowID = "custom"; return }
-        flowID = selected?.isPair == true ? ControllerTestFlow.joyConPair.id : ControllerTestFlow.joyConSingle.id
+        guard let target = selected else { flowID = ControllerTestFlow.joyConSingle.id; return }
+        if target.isPair { flowID = ControllerTestFlow.joyConPair.id }
+        else if target.joyConSide != nil { flowID = ControllerTestFlow.joyConSingle.id }
+        else { flowID = customSteps.isEmpty ? ControllerTestFlow.joyConSingle.id : "custom" }
     }
     /// 按「開始」才跑流程：示意模型、对上自动下一步、录制都在开始之后（11-27：没按开始，平放着的手柄就被当成第 1 步对上、自己往下走）
     @Published private(set) var running = false

@@ -164,7 +164,8 @@ defaults write <App 的 bundle id> S2AControllerSimulate -bool NO
   （`NpadImu.Push`：单只 Y 镜像、一对绕 X 转 180°；单测会读那个文件对照，两边改了要一起改），转换不对时模型会跟手上的动作相反。
 - **测试流程**：按「开始」后依步骤做，每步有浅蓝色的目标模型和右上角的示意图，对上并停住 1 秒自动下一步；「上一步 / 下一步」可以选从哪一步开始。
   流程跟着选的手柄定：单只 Joy-Con → 单只测试，一对 → 一对测试（`ControllerTestFlow.swift`）。
-  `~/S2Arm/dev/controller-test/steps.json` 存在时改用它（只有文字、手动下一步，格式见 `ControllerTestStep.parse`）。
+  没有内建流程的手柄（Pro、PS、Xbox 等）可以放一份 `~/S2Arm/dev/controller-test/steps.json`（只有文字、手动下一步，格式见 `ControllerTestStep.parse`）；
+  Joy-Con 一律用内建流程，不会被它盖掉。
 - **录制**：按「开始」同时录，每次一个 `~/S2Arm/dev/controller-test/readings-<时间>-<流程>.tsv`（时间、手柄、左右、步骤、六轴）。
 
 现在只做了 Joy-Con 的测试流程（Joy-Con 2；一代 Joy-Con 用同一套步骤，但读数口径还没有真机校对，见 `Gen1Axes`）。
