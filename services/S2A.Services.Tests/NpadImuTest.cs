@@ -16,7 +16,7 @@ namespace S2A.Services.Tests
     //   ⑥ 321 → Imu 不在用；之后喂数不再写（格 0 写入位置仍 1）
     //   ⑧ 玩家 1 左只、玩家 2 右只：左只写传感器 0，右只写传感器 1
     //   ⑩ 时间戳没往前的读数不重写（双 Joy-Con 每拍重推同一份时，游戏不会把同一份角速度积分好几遍）
-    //   ⑨ 单只 Joy-Con 写 IMU 前按 Y 轴镜像（加速度 Y、角速度 X / Z 取反）；一对绕 X 轴转 180°（⑦：加速度 / 角速度 Y、Z 取反）；Pro 不动（②）
+    //   ⑨ Joy-Con（单只 / 一对⑦）写 IMU 前加速度三轴取反（原始是比力，IMU 要重力方向）、角速度不动；Pro 不动（②）
     public static unsafe partial class Program
     {
         [SoloTest("--npad-imu", Booted = true)]
@@ -96,7 +96,7 @@ namespace S2A.Services.Tests
             npads.Update(new System.Collections.Generic.List<GamepadInput> { new() { PlayerId = PlayerIndex.Player1 } });
             npads.PushImu(PlayerIndex.Player1, a, new Vector3(90, 0, 0), 300000, 0);
             npads.PushImu(PlayerIndex.Player1, a, new Vector3(-90, 0, 0), 300000, 1);
-            Check("NpadImu ⑦ 双 Joy-Con 左右各写各的（绕 X 轴转 180°：角速度 X 不变、加速度 Z 取反）：格 0 / 传感器 1 格写入位置、角速度 X、加速度 Z",
+            Check("NpadImu ⑦ 双 Joy-Con 左右各写各的（加速度取反、角速度不动）：格 0 / 传感器 1 格写入位置、角速度 X、加速度 Z",
                 "结果 0、1 / 1、1.5707964 / -1.5707964、-9.80665",
                 $"结果 {en2.Result}、{Wi(0)} / {Wi(0x1950)}、{F32(0x1c)} / {F32(0x1950 + 0x1c)}、{F32(0x18)}");
             npads.Configure(new ControllerConfig { Player = PlayerIndex.Player1, Type = ControllerType.ProController });
@@ -113,13 +113,13 @@ namespace S2A.Services.Tests
             npads.PushImu(PlayerIndex.Player1, a, new Vector3(90, 0, 0), 400000);
             npads.PushImu(PlayerIndex.Player2, a, new Vector3(-90, 0, 0), 400000);
             Check("NpadImu ⑧ 左只 / 右只各一人：玩家 1 传感器 0 / 1、玩家 2 传感器 0 / 1 写入位置，玩家 2 传感器 1 角速度 X",
-                "结果 0、1 / 0、0 / 1、1.5707964",
+                "结果 0、1 / 0、0 / 1、-1.5707964",
                 $"结果 {en3.Result}、{Wi(0)} / {Wi(0x1950)}、{Wi(0x288)} / {Wi(0x1950 + 0x288)}、{F32(0x1950 + 0x288 + 0x1c)}");
-            // ⑨ 单只样式按 Y 轴镜像：加速度 (0.5, 0.25, 1) g、角速度 (10, 20, 30) 度/秒 → 加速度 Y、角速度 X / Z 取反
+            // ⑨ 单只样式：加速度 (0.5, 0.25, 1) g、角速度 (10, 20, 30) 度/秒 → 加速度三轴取反、角速度不动
             npads.PushImu(PlayerIndex.Player1, new Vector3(0.5f, 0.25f, 1f), new Vector3(10, 20, 30), 405000);
             const ulong s9 = 1 * 0x28;   // 玩家 1 传感器 0 的第 2 笔
-            Check("NpadImu ⑨ 单只样式 Y 轴镜像：加速度 X / Y / Z、角速度 X / Y / Z",
-                "4.903325 / -2.4516625 / 9.80665、-0.17453292 / 0.34906584 / -0.5235988",   // 0.5 / −0.25 / 1 g × 9.80665；−10 / 20 / −30 度 × π/180（float）
+            Check("NpadImu ⑨ 单只样式加速度取反、角速度不动：加速度 X / Y / Z、角速度 X / Y / Z",
+                "-4.903325 / -2.4516625 / -9.80665、0.17453292 / 0.34906584 / 0.5235988",   // −0.5 / −0.25 / −1 g × 9.80665；10 / 20 / 30 度 × π/180（float）
                 $"{F32(s9 + 0x10)} / {F32(s9 + 0x14)} / {F32(s9 + 0x18)}、{F32(s9 + 0x1c)} / {F32(s9 + 0x20)} / {F32(s9 + 0x24)}");
             // ⑩ 同一笔读数（时间戳没往前）不重写：同格同时间戳再推一次，写入位置不动
             npads.PushImu(PlayerIndex.Player1, new Vector3(0.5f, 0.25f, 1f), new Vector3(10, 20, 30), 405000);

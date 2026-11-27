@@ -80,25 +80,17 @@ namespace Ryujinx.HLE.HOS.Services.Hid
         // accelerationG：加速度（g），angularVelocityDegrees：角速度（度/秒），都是 NS2 原始坐标；timestampUs：读数的单调时间戳（微秒）
         // sensor：双 Joy-Con 左右各有读数时 0 = 左只、1 = 右只各写各的；-1 = 单一体感源（双 Joy-Con 时左右写同一份，同改前）
         // style：这一格的样式（不含 Joy-Con 2 位）。Joy-Con 2 原始坐标走六轴（SixAxis）是对的，写进 IMU 要先换口径（只动 IMU 这一路）：
-        //   - 单只（左只 / 右只）：按 Y 轴镜像（加速度 Y 取反，角速度 X、Z 取反）。实机：两人各拿一只，不换时手往左挥、画面往右，换后左右、发球都对
-        //   - 一对：绕 X 轴转 180°（加速度、角速度的 Y、Z 取反）。实机：不换时「立起握住」的检查一直不过；只照单只镜像时检查能过但左右闪躲反了，换这个都对
-        //   - 左右两只同一口径（实机量过：两只并排一起转，原始陀螺同轴同号）
+        //   - Joy-Con（单只 / 一对，左右两只同一口径）：加速度三轴取反、角速度不动。原始坐标是右手系（x 右、y 前、z 上，陀螺绕同一组轴、右手定则），
+        //     加速度是比力（平放 z = +1 g）；IMU 样本要的是重力方向（平放 z = −1 g，SDK 的融合读样本时再取反成比力），角速度同原始
+        //   - 改前单只按 Y 轴镜像、一对绕 X 轴转 180°：两者差一个镜射，一个项目对、另一个就反（实机：一对拿其中一只单手挥拍时左右反，
+        //     双手立握的项目左右闪躲反，只能二选一）。换成上面这个后两边都对：左手 / 右手单手挥拍，双手立握的立起检查与左右闪躲
         //   - 单只右 Joy-Con 写右只那支传感器（传感器 1），同真机：游戏按样式读右只那格（改前一律写传感器 0，拿右只的玩家体感校准永远等不到读数）
         internal void Push(PlayerIndex player, NpadStyleTag style, Vector3 accelerationG, Vector3 angularVelocityDegrees, ulong timestampUs, int sensor = -1)
         {
             bool joyDual = style == NpadStyleTag.JoyDual;
-            if (style is NpadStyleTag.JoyLeft or NpadStyleTag.JoyRight)
+            if (joyDual || style is NpadStyleTag.JoyLeft or NpadStyleTag.JoyRight)
             {
-                accelerationG.Y = -accelerationG.Y;
-                angularVelocityDegrees.X = -angularVelocityDegrees.X;
-                angularVelocityDegrees.Z = -angularVelocityDegrees.Z;
-            }
-            else if (joyDual)
-            {
-                accelerationG.Y = -accelerationG.Y;
-                accelerationG.Z = -accelerationG.Z;
-                angularVelocityDegrees.Y = -angularVelocityDegrees.Y;
-                angularVelocityDegrees.Z = -angularVelocityDegrees.Z;
+                accelerationG = -accelerationG;
             }
 
             lock (_lock)
