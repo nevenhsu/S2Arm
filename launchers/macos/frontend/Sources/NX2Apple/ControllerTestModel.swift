@@ -122,8 +122,10 @@ struct ControllerTestStep: Equatable {
         enum Kind: Equatable {
             case relay(player: Int, shape: ControllerTestIMU.Shape)   // Joy-Con 2 / Switch 2 Pro（连接程序）
             case system(ObjectIdentifier)                             // 系统蓝牙手柄
+            case gen1(left: String?, right: String?)                  // 一代 Joy-Con（HID 设备 id）：读数取自系统认到的那一只（gen1Owners 对应）
             case simulated                                            // 「模擬手把」加的，没有读数
         }
+        enum Model: Equatable { case joyCon2, joyCon1, whole }
         let id: String
         let title: String
         let player: String   // P1… / —（没有玩家位）
@@ -131,8 +133,10 @@ struct ControllerTestStep: Equatable {
         let kind: Kind
         let dots: [ControllerTint?]   // 颜色点：一对两颗
         var joyConSide: String? = nil   // 单只 Joy-Con 是哪一只（L / R）：模型画左只还是右只、录制的 side 栏
-        var isPair: Bool { if case .relay(_, .pair) = kind { return true }; return false }
-        var wholePad: Bool { if case .relay(_, .other) = kind { return true }; if case .system = kind { return true }; return false }
+        var model: Model = .joyCon2
+        var pair = false                // 一对（Joy-Con 2 拼成一对 / 一代按分配是一对）
+        var isPair: Bool { pair || { if case .relay(_, .pair) = kind { return true }; return false }() }
+        var wholePad: Bool { model == .whole }
     }
     @Published var selectedID: String? { didSet { if selectedID != oldValue { selectionChanged() } } }
     @Published var poseFromGame = false
@@ -176,20 +180,68 @@ struct ControllerTestStep: Equatable {
                                   meta: simulated ? simMeta : relayMeta,
                                   kind: simulated ? .simulated : .relay(player: d.player, shape: joyCon ? .single : .other),
                                   dots: joyCon ? [tint(d.id, left: d.kind == 2)] : [ControllerTint(body: 0x3b3b3b)],
-                                  joyConSide: joyCon ? (d.kind == 2 ? "L" : "R") : nil))
+                                  joyConSide: joyCon ? (d.kind == 2 ? "L" : "R") : nil, model: joyCon ? .joyCon2 : .whole))
             }
         }
         let pads = systems?.pads ?? []
+        // 一代 Joy-Con：按分配看单只 / 一对（同手柄面板）；系统合成的「Joy-Con (L/R)」等不另列，读数从它取
+        out += gen1Targets(slots: slots, player: player)
         let simPads = Set(ControllerColorSimulator.allowed ? sim.systemPads().map(\.id) : [])
-        for (i, pad) in pads.enumerated() {
+        for (i, pad) in pads.enumerated() where ![.gen1Left, .gen1Right, .gen1Pair].contains(pad.family) {
             let index = pads[..<i].filter { $0.name == pad.name }.count
             let simulated = simPads.contains(pad.id)
             out.append(Target(id: "sys:\(pad.name)#\(index)", title: pad.name,
                               player: player { if case let .system(n, x) = $0 { return n == pad.name && x == index }; return false },
                               meta: simulated ? simMeta : SimText.pick("系統手把", "系统手柄", "System controller"),
-                              kind: simulated ? .simulated : .system(pad.id), dots: [nil]))
+                              kind: simulated ? .simulated : .system(pad.id), dots: [nil], model: .whole))
         }
         return out
+    }
+    /// 一代 Joy-Con 的目标：分配里的一对（.gen1Pair，或系统合成的那一位里两只都认得）算一只一对，其余每只单只；颜色用读到的出厂色
+    private func gen1Targets(slots: [PlayerAssignment.Unit?], player: ((PlayerAssignment.Unit) -> Bool) -> String) -> [Target] {
+        guard let systems, let controller else { return [] }
+        let devices = systems.gen1
+        guard !devices.isEmpty else { return [] }
+        let owners = controller.assignment.gen1Owners(system: SystemControllers.keys(for: systems.pads), gen1: devices)
+        func tint(_ id: String?, left: Bool) -> ControllerTint? { id.flatMap { systems.gen1Colors[$0] } ?? Gen1Look.defaultTint(left: left) }
+        let meta = SimText.pick("一代・系統手把", "一代・系统手柄", "Gen-1 · system")
+        var out: [Target] = [], used = Set<String>()
+        var pairs: [(String, String)] = []
+        for unit in slots.compactMap({ $0 }) {
+            switch unit {
+            case let .gen1Pair(l, r): pairs.append((l, r))
+            case .system:   // 系统合成的一位：里面左右两只都认得 = 一对
+                for (_, sides) in owners { if let l = sides[0], let r = sides[1], !pairs.contains(where: { $0.0 == l }) { pairs.append((l, r)) } }
+            default: break
+            }
+        }
+        for (l, r) in pairs where devices.contains(where: { $0.id == l }) && devices.contains(where: { $0.id == r }) && !used.contains(l) {
+            used.formUnion([l, r])
+            let simulated = l.hasPrefix("sim-")
+            out.append(Target(id: "g1:\(l)+\(r)", title: SimText.pick("一代 Joy-Con（一對）", "一代 Joy-Con（一对）", "Gen-1 Joy-Con (pair)"),
+                              player: player { switch $0 { case let .gen1Pair(a, b): return a == l || b == r; case let .system(n, i): return owners[.init(name: n, index: i)]?[0] == l; default: return false } },
+                              meta: simulated ? SimText.pick("模擬", "模拟", "Simulated") : meta, kind: simulated ? .simulated : .gen1(left: l, right: r),
+                              dots: [tint(l, left: true), tint(r, left: false)], model: .joyCon1, pair: true))
+        }
+        for d in devices where !used.contains(d.id) {
+            let left = d.side == 0, simulated = d.id.hasPrefix("sim-")
+            out.append(Target(id: "g1:\(d.id)", title: left ? SimText.pick("一代 Joy-Con（左）", "一代 Joy-Con（左）", "Gen-1 Joy-Con (L)") : SimText.pick("一代 Joy-Con（右）", "一代 Joy-Con（右）", "Gen-1 Joy-Con (R)"),
+                              player: player { switch $0 { case let .gen1(x, _): return x == d.id; case let .system(n, i): return owners[.init(name: n, index: i)]?[d.side] == d.id; default: return false } },
+                              meta: simulated ? SimText.pick("模擬", "模拟", "Simulated") : meta,
+                              kind: simulated ? .simulated : .gen1(left: left ? d.id : nil, right: left ? nil : d.id),
+                              dots: [tint(d.id, left: left)], joyConSide: left ? "L" : "R", model: .joyCon1))
+        }
+        return out
+    }
+    /// 这一边画哪种模型
+    func shape(for channel: Channel) -> PoseView.Shape {
+        guard let target = selected else { return .wholePad }
+        let right = channel.side == "R"
+        switch target.model {
+        case .whole: return .wholePad
+        case .joyCon1: return right ? .gen1Right : .gen1Left
+        case .joyCon2: return right ? .joyConRight : .joyConLeft
+        }
     }
     var selected: Target? {
         let all = targets
@@ -228,9 +280,6 @@ struct ControllerTestStep: Equatable {
     /// 设备上「顶端」那一点（画轨迹用）：Joy-Con 长轴 +Y 那头；整只手柄同一点
     static let tip = SIMD3<Double>(0, 0.05, 0)
 
-    // —— 系统手柄的 motion ——
-    private weak var motionPad: GCController?
-    private var motionActivated = false
 
     // —— 面板开关 ——
     private var timer: Timer?
@@ -266,8 +315,8 @@ struct ControllerTestStep: Equatable {
             if gameRunning() || hostRunning { return .gameRunning }
             if controller?.assigning == true { return .assigning }
             if source?.relayOpen != true { return .relayClosed }
-        case .system:
-            if motionPad?.motion == nil { return .noMotion }
+        case .system, .gen1:
+            if motionPads.isEmpty || motionPads.contains(where: { $0.pad?.motion == nil }) { return .noMotion }
         }
         return channels.contains { $0.last != nil } ? .ok : .waiting
     }
@@ -275,6 +324,7 @@ struct ControllerTestStep: Equatable {
         switch selected?.kind {
         case .relay: return SimText.pick("Joy-Con 2 連接程式", "Joy-Con 2 连接程序", "Joy-Con 2 helper")
         case .system: return "GameController"
+        case .gen1: return motionPads.count == 1 && channels.count == 2 ? SimText.pick("GameController（一對共用一份）", "GameController（一对共用一份）", "GameController (one stream for the pair)") : "GameController"
         default: return "—"
         }
     }
@@ -288,9 +338,12 @@ struct ControllerTestStep: Equatable {
         switch target.kind {
         case let .relay(_, shape):
             channels = shape == .pair ? [Channel(side: "L", shape: .pair), Channel(side: "R", shape: .pair)] : [Channel(side: target.joyConSide ?? "-", shape: shape)]
-        case let .system(id):
+        case .system:
             channels = [Channel(side: "-", shape: .other)]
-            if open { attachMotion(id) }
+            if open { attachMotion() }
+        case let .gen1(l, r):
+            channels = target.isPair ? [Channel(side: "L", shape: .pair), Channel(side: "R", shape: .pair)] : [Channel(side: l != nil ? "L" : "R", shape: .single)]
+            if open { attachMotion() }
         case .simulated: channels = []
         }
         objectWillChange.send()
@@ -306,7 +359,7 @@ struct ControllerTestStep: Equatable {
         // 清单变了（选的那只断开 / 拼对拆开）：换新的那几边
         let current = selected?.id
         if current != shownTargetID { shownTargetID = current; selectionChanged() }
-        if case let .system(id) = selected?.kind, motionPad == nil { attachMotion(id) }
+        if motionPads.isEmpty, let kind = selected?.kind, { if case .system = kind { return true }; if case .gen1 = kind { return true }; return false }() { attachMotion() }
         checkStep(now: now)
         if recording != nil, now - lastFlush > 1 { lastFlush = now; flushRecording() }
         objectWillChange.send()
@@ -345,31 +398,66 @@ struct ControllerTestStep: Equatable {
         }
     }
 
-    private func attachMotion(_ id: ObjectIdentifier) {
-        guard let pad = GCController.controllers().first(where: { ObjectIdentifier($0) == id }) else { return }
-        motionPad = pad
-        guard let motion = pad.motion else { return }
-        if motion.sensorsRequireManualActivation, !motion.sensorsActive { motion.sensorsActive = true; motionActivated = true }
-        // 启动器别处不接 motion 的回调；面板关了 / 换手柄就还原
-        motion.valueChangedHandler = { [weak self] m in
-            MainActor.assumeIsolated { self?.receiveSystem(m) }
+    /// 系统手柄的读数源：哪个 GameController 给哪几边（一代一对被系统合成一只时两边同一个）
+    private struct MotionSource { weak var pad: GCController?; let sides: [String]; let activated: Bool }
+    private var motionPads: [MotionSource] = []
+    /// 选中那只每一边的读数来自哪个系统手柄
+    private func motionAssignments() -> [(ObjectIdentifier, [String])] {
+        guard let target = selected, let systems else { return [] }
+        switch target.kind {
+        case let .system(id): return [(id, ["-"])]
+        case let .gen1(l, r):
+            let keys = SystemControllers.keys(for: systems.pads)
+            let owners = controller?.assignment.gen1Owners(system: keys, gen1: systems.gen1) ?? [:]
+            var out: [ObjectIdentifier: [String]] = [:]
+            for (side, id, family) in [("L", l, SystemControllers.Family.gen1Left), ("R", r, .gen1Right)] {
+                guard let id else { continue }
+                let channelSide = target.isPair ? side : channels.first?.side ?? side
+                // 认得是哪一位（gen1Owners）就用那一位；认不得：同一边只有一只系统手柄时用它
+                let key = owners.first { $0.value.values.contains(id) }?.key
+                let pad = key.flatMap { k in zip(keys, systems.pads).first { $0.0 == k }?.1 }
+                    ?? { let c = systems.pads.filter { $0.family == family }; return c.count == 1 ? c[0] : nil }()
+                    ?? { let c = systems.pads.filter { $0.family == .gen1Pair }; return c.count == 1 ? c[0] : nil }()
+                if let pad { out[pad.id, default: []].append(channelSide) }
+            }
+            return out.map { ($0.key, $0.value) }
+        default: return []
         }
     }
-    private func receiveSystem(_ m: GCMotion) {
-        guard open, let channel = channels.first else { return }
+    private func attachMotion() {
+        releaseMotionPad()
+        let all = GCController.controllers()
+        for (id, sides) in motionAssignments() {
+            guard let pad = all.first(where: { ObjectIdentifier($0) == id }) else { continue }
+            var activated = false
+            if let motion = pad.motion {
+                if motion.sensorsRequireManualActivation, !motion.sensorsActive { motion.sensorsActive = true; activated = true }
+                // 启动器别处不接 motion 的回调；面板关了 / 换手柄就还原
+                motion.valueChangedHandler = { [weak self] m in MainActor.assumeIsolated { self?.receiveSystem(m, sides: sides) } }
+            }
+            motionPads.append(MotionSource(pad: pad, sides: sides, activated: activated))
+        }
+    }
+    private func receiveSystem(_ m: GCMotion, sides: [String]) {
+        guard open, let target = selected else { return }
         let a = m.hasGravityAndUserAcceleration ? SIMD3(m.gravity.x + m.userAcceleration.x, m.gravity.y + m.userAcceleration.y, m.gravity.z + m.userAcceleration.z)
             : SIMD3(m.acceleration.x, m.acceleration.y, m.acceleration.z)
         let r = m.rotationRate
-        let s = IMUSample(accel: a, gyro: SIMD3(r.x, r.y, r.z) * (180 / .pi))
-        if channel.last == s { return }
-        add(s, to: channel, at: ProcessInfo.processInfo.systemUptime)
+        let raw = IMUSample(accel: a, gyro: SIMD3(r.x, r.y, r.z) * (180 / .pi))
+        for channel in channels where sides.contains(channel.side) || sides == ["-"] {
+            // 一代 Joy-Con：GameController 的轴换成跟 Joy-Con 2 原始读数同一套（Gen1Axes，待真机校正）
+            let s = target.model == .joyCon1 ? Gen1Axes.toDevice(raw, side: channel.side) : raw
+            if channel.last == s { continue }
+            add(s, to: channel, at: ProcessInfo.processInfo.systemUptime)
+        }
     }
     private func releaseMotionPad() {
-        if let motion = motionPad?.motion {
+        for source in motionPads {
+            guard let motion = source.pad?.motion else { continue }
             motion.valueChangedHandler = nil
-            if motionActivated { motion.sensorsActive = false }
+            if source.activated { motion.sensorsActive = false }
         }
-        motionPad = nil; motionActivated = false
+        motionPads = []
     }
 
     // —— 步骤：内建流程（文字 + 淡色目标模型，对上停住 1 秒自动下一步），steps.json 有就多一个「临时流程」可选 ——

@@ -159,3 +159,16 @@ struct ControllerTestFlow {
     static let stillGyro = 20.0      // 角速度低于这个（度/秒）算停住
     static let holdSeconds = 1.0     // 对上并停住这么久自动下一步
 }
+
+/// 一代 Joy-Con 的读数口径（还没有真机校对）：读数来自 GameController 的 motion（重力 + 用户加速度 g、角速度 弧度/秒 → 换成 度/秒），
+///   这里把它换成跟 Joy-Con 2 原始读数同一套设备轴（Z = 按键面朝外、+Y = 顶端、X = Y × Z），步骤目标、淡色模型、「遊戲看到的」才对得上。
+///   现在先当成同一套（不换）。手上有一代 Joy-Con 的人：平放面朝上看加速度哪一轴是 +1、立起顶端朝上看哪一轴是 +1，
+///   照 ControllerTestModelTests.testGen1AxesIdentityUntilCalibrated 的写法改这里，同时改那个单测
+enum Gen1Axes {
+    static func toDevice(_ s: IMUSample, side: String) -> IMUSample { s }
+}
+
+/// 一代 Joy-Con 的样子：整只机身一个颜色（读到的出厂机身色），按键另一个颜色；没读到用电光蓝 / 电光红
+enum Gen1Look {
+    static func defaultTint(left: Bool) -> ControllerTint { left ? ControllerTint(body: 0x0ab9e6, buttons: 0x001e1e) : ControllerTint(body: 0xff3c28, buttons: 0x1e0a0a) }
+}

@@ -258,7 +258,7 @@ private struct ChannelColumn: View {
             let pose = hub.poseFromGame ? channel.gamePose : channel.rawPose
             ZStack(alignment: .topLeading) {
                 PoseView(pose: pose, ghost: hub.poseFromGame ? nil : hub.ghost(for: channel), trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
-                         shape: wholePad ? .wholePad : channel.side == "R" ? .joyConRight : .joyConLeft,
+                         shape: hub.shape(for: channel),
                          tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
                     .frame(height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -268,7 +268,7 @@ private struct ChannelColumn: View {
                 }
                 // 测试中：右上角一张实色示意（标准姿态、固定视角），转动类的步骤从上一个姿态循环转到目标，看得出怎么动
                 if let poses = hub.illustration(side: channel.side) {
-                    StepInset(from: poses.from, to: poses.to, shape: wholePad ? .wholePad : channel.side == "R" ? .joyConRight : .joyConLeft,
+                    StepInset(from: poses.from, to: poses.to, shape: hub.shape(for: channel),
                               tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
                         .frame(width: 120, height: 96)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -346,7 +346,7 @@ private struct Wave: View {
 /// 3D 姿态（SceneKit）：基本形状拼的 Joy-Con / 整只手柄，照姿态转；蓝点是顶端最近 1.5 秒的路线。
 ///   世界坐标 Z 朝上（PoseFilter），SceneKit 是 Y 朝上：外层节点绕 X 转 −90° 换过去；镜头在屏幕前的人那边（世界 −Y）偏右、稍高处（斜着看才看得出立体，正对时横握只看到一端）
 struct PoseView: NSViewRepresentable {
-    enum Shape: Equatable { case joyConLeft, joyConRight, wholePad }
+    enum Shape: Equatable { case joyConLeft, joyConRight, gen1Left, gen1Right, wholePad }
     let pose: PoseFilter
     let ghost: simd_quatd?   // 这一步的目标姿态（淡色模型）；nil = 不画
     let trail: [SIMD3<Double>]
@@ -460,6 +460,19 @@ struct PoseView: NSViewRepresentable {
                 add(SCNCylinder(radius: 0.0026, height: 0.003), button, SCNVector3(CGFloat(dx), buttonsY + CGFloat(dy), 0.0075), rotateX: true)
             }
             add(SCNBox(width: 0.02, height: 0.004, length: 0.006, chamferRadius: 0.002), dark, SCNVector3(0, 0.049, 0))   // 顶端肩键
+        case .gen1Left, .gen1Right:
+            // 一代 Joy-Con：整只机身一个颜色、按键另一个颜色（读到的出厂色，没读到用电光蓝 / 电光红），滑轨深灰；比 Joy-Con 2 稍短稍窄
+            let right = shape == .gen1Right
+            let look = tint ?? Gen1Look.defaultTint(left: !right)
+            let body = monochrome ?? color(look.body), button = monochrome ?? color(look.buttons ?? 0x1e1e1e)
+            add(SCNBox(width: 0.03, height: 0.092, length: 0.014, chamferRadius: 0.008), body, SCNVector3(0, 0, 0))
+            add(SCNBox(width: 0.004, height: 0.08, length: 0.011, chamferRadius: 0.002), dark, SCNVector3(right ? -0.0155 : 0.0155, 0, 0))   // 滑轨在内侧
+            let stickY: CGFloat = right ? -0.014 : 0.022, buttonsY: CGFloat = right ? 0.022 : -0.014
+            add(SCNCylinder(radius: 0.0065, height: 0.006), dark, SCNVector3(0, stickY, 0.009), rotateX: true)
+            for (dx, dy) in [(0.0, 0.006), (0.0, -0.006), (0.006, 0.0), (-0.006, 0.0)] {
+                add(SCNCylinder(radius: 0.0024, height: 0.003), button, SCNVector3(CGFloat(dx), buttonsY + CGFloat(dy), 0.0075), rotateX: true)
+            }
+            add(SCNBox(width: 0.018, height: 0.004, length: 0.006, chamferRadius: 0.002), button, SCNVector3(0, 0.045, 0))   // 顶端肩键
         case .wholePad:
             let body = NSColor(calibratedWhite: 0.32, alpha: 1)
             add(SCNBox(width: 0.12, height: 0.05, length: 0.022, chamferRadius: 0.011), body, SCNVector3(0, 0, 0))

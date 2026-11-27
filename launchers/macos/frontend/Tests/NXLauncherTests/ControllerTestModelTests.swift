@@ -192,7 +192,11 @@ final class ControllerTestModelTests: XCTestCase {
     /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤左右只各画一只，一对的画左右两只
     @MainActor func testRenderFlowSheet() throws {
         guard let out = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER"] else { throw XCTSkip("S2A_FLOW_RENDER 没设") }
-        let flow = ControllerTestFlow(id: "all", hant: "", hans: "", en: "", steps: ControllerTestFlow.joyConSingle.steps + ControllerTestFlow.joyConPair.steps)
+        // S2A_FLOW_RENDER_FLOW=single / pair 只出一套（缺省两套都出）
+        let which = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER_FLOW"]
+        let steps = which == "single" ? ControllerTestFlow.joyConSingle.steps : which == "pair" ? ControllerTestFlow.joyConPair.steps
+            : ControllerTestFlow.joyConSingle.steps + ControllerTestFlow.joyConPair.steps
+        let flow = ControllerTestFlow(id: "all", hant: "", hans: "", en: "", steps: steps)
         let right = flow.illustration(side: "R"), left = flow.illustration(side: "L")
         let cell = NSSize(width: 300, height: 230), cols = 3
         let rows = (flow.steps.count + cols - 1) / cols
@@ -222,7 +226,13 @@ final class ControllerTestModelTests: XCTestCase {
             let col = i % cols, row = i / cols
             let origin = NSPoint(x: CGFloat(col) * cell.width, y: sheet.size.height - CGFloat(row + 1) * cell.height)
             // 单只的步骤左右只各画一只（左只在左、右只在右，各自单独测）
-            let items: [(PoseView.Shape, simd_quatd, CGFloat)] = [(.joyConLeft, left[i], -0.065), (.joyConRight, right[i], 0.065)]
+            // S2A_FLOW_RENDER_SIDE=L / R：单只的步骤只画那一只（看起来才不像一对）
+            let only = step.who == .single ? ProcessInfo.processInfo.environment["S2A_FLOW_RENDER_SIDE"] : nil
+            // S2A_FLOW_RENDER_MODEL=gen1：画一代 Joy-Con
+            let gen1 = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER_MODEL"] == "gen1"
+            let l: PoseView.Shape = gen1 ? .gen1Left : .joyConLeft, r: PoseView.Shape = gen1 ? .gen1Right : .joyConRight
+            let items: [(PoseView.Shape, simd_quatd, CGFloat)] = only == "R" ? [(r, right[i], 0)] : only == "L" ? [(l, left[i], 0)]
+                : [(l, left[i], -0.065), (r, right[i], 0.065)]
             render(items).draw(in: NSRect(x: origin.x + 4, y: origin.y + 40, width: cell.width - 8, height: cell.height - 44))
             let text = "\(i + 1). " + step.hant + "\n" + step.en
             (text as NSString).draw(in: NSRect(x: origin.x + 8, y: origin.y + 2, width: cell.width - 16, height: 38),
@@ -250,5 +260,14 @@ final class ControllerTestModelTests: XCTestCase {
             let leaned = ControllerTestFlow.rotated(ControllerTestFlow.pose(.boxing, side: side), .faceForward, degrees: 45, side: side)
             XCTAssertGreaterThan(leaned.act(SIMD3(0, 1, 0)).x, 0.7)
         }
+    }
+
+    /// 一代 Joy-Con 的轴还没真机校对：先当成跟 Joy-Con 2 原始读数同一套。有真机的人校对后改 Gen1Axes，同时把这里的期望改成量到的对应
+    func testGen1AxesIdentityUntilCalibrated() {
+        let s = IMUSample(accel: SIMD3(0.1, 0.2, 0.9), gyro: SIMD3(10, 20, 30))
+        for side in ["L", "R"] { XCTAssertEqual(Gen1Axes.toDevice(s, side: side), s) }
+        // 没读到出厂色时：左电光蓝、右电光红
+        XCTAssertEqual(Gen1Look.defaultTint(left: true).body, 0x0ab9e6)
+        XCTAssertEqual(Gen1Look.defaultTint(left: false).body, 0xff3c28)
     }
 }
