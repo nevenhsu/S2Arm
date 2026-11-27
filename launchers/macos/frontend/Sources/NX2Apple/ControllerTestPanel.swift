@@ -331,7 +331,7 @@ private struct Wave: View {
 }
 
 /// 3D 姿态（SceneKit）：基本形状拼的 Joy-Con / 整只手柄，照姿态转；蓝点是顶端最近 1.5 秒的路线。
-///   世界坐标 Z 朝上（PoseFilter），SceneKit 是 Y 朝上：外层节点绕 X 转 −90° 换过去；镜头在屏幕前的人那边（世界 −Y）稍高处
+///   世界坐标 Z 朝上（PoseFilter），SceneKit 是 Y 朝上：外层节点绕 X 转 −90° 换过去；镜头在屏幕前的人那边（世界 −Y）偏右、稍高处（斜着看才看得出立体，正对时横握只看到一端）
 struct PoseView: NSViewRepresentable {
     enum Shape: Equatable { case joyConLeft, joyConRight, wholePad }
     let pose: PoseFilter
@@ -372,7 +372,7 @@ struct PoseView: NSViewRepresentable {
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 40
         camera.camera?.zNear = 0.01
-        camera.position = SCNVector3(0, 0.09, 0.24)
+        camera.position = SCNVector3(0.1, 0.11, 0.21)
         camera.look(at: SCNVector3(0, 0, 0))
         c.scene.rootNode.addChildNode(camera)
         view.pointOfView = camera

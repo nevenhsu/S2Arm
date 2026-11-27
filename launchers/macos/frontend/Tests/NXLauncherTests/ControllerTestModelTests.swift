@@ -2,6 +2,8 @@
 //   照里面「X = -X」的赋值推出每种形态取反哪几轴，跟 Swift 这份对照（两边哪边改了、另一边没跟，这里就红）。另测姿态融合、步骤文件、体感包解码
 import XCTest
 import simd
+import SceneKit
+import AppKit
 import LauncherPadBridge
 @testable import NX2AppleUI
 
@@ -143,5 +145,62 @@ final class ControllerTestModelTests: XCTestCase {
         let name = ControllerTestHub.recordName(date: date, flow: "joycon")
         XCTAssertTrue(name.hasPrefix("readings-19") || name.hasPrefix("readings-1970"))
         XCTAssertTrue(name.hasSuffix("-joycon.tsv"))
+    }
+
+    /// 内建流程每一步都有目标姿态（示意图），回起始姿势那几步跟第 1 步一样；右只往右转后顶端指向右边
+    func testFlowIllustrations() {
+        let flow = ControllerTestFlow.joyCon
+        XCTAssertFalse(flow.steps.contains { $0.target == .manual })
+        let poses = flow.illustration(side: "R")
+        XCTAssertEqual(poses.count, flow.steps.count)
+        XCTAssertLessThan(ControllerTestFlow.angle(poses[2], poses[0]), 0.01)
+        XCTAssertLessThan(ControllerTestFlow.angle(poses[4], poses[0]), 0.01)
+        XCTAssertGreaterThan(poses[1].act(SIMD3(0, 1, 0)).x, 0.99)
+        // 往左倾从立直算：跟往右倾差 90°
+        XCTAssertEqual(ControllerTestFlow.angle(poses[7], poses[8]), 90, accuracy: 0.1)
+    }
+
+    /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤画右只，一对的画左右两只
+    @MainActor func testRenderFlowSheet() throws {
+        guard let out = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER"] else { throw XCTSkip("S2A_FLOW_RENDER 没设") }
+        let flow = ControllerTestFlow.joyCon
+        let right = flow.illustration(side: "R"), left = flow.illustration(side: "L")
+        let cell = NSSize(width: 300, height: 230), cols = 3
+        let rows = (flow.steps.count + cols - 1) / cols
+        let sheet = NSImage(size: NSSize(width: cell.width * CGFloat(cols), height: cell.height * CGFloat(rows)))
+        func render(_ items: [(PoseView.Shape, simd_quatd, CGFloat)]) -> NSImage {
+            let scene = SCNScene(), world = SCNNode()
+            world.eulerAngles.x = -.pi / 2
+            scene.rootNode.addChildNode(world)
+            for (shape, q, x) in items {
+                let n = SCNNode(); PoseView.build(shape, tint: nil, into: n)
+                n.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
+                n.position = SCNVector3(x, 0, 0); world.addChildNode(n)
+            }
+            let floor = SCNNode(geometry: SCNPlane(width: 0.3, height: 0.24)); floor.position = SCNVector3(0, 0, -0.06)
+            floor.geometry?.firstMaterial?.diffuse.contents = NSColor(calibratedWhite: 0.9, alpha: 1); world.addChildNode(floor)
+            let cam = SCNNode(); cam.camera = SCNCamera(); cam.camera?.fieldOfView = 40; cam.camera?.zNear = 0.01
+            cam.position = SCNVector3(0.1, 0.11, 0.21); cam.look(at: SCNVector3(0, 0, 0)); scene.rootNode.addChildNode(cam)
+            let light = SCNNode(); light.light = SCNLight(); light.light?.type = .omni; light.position = SCNVector3(0.1, 0.3, 0.3); scene.rootNode.addChildNode(light)
+            let amb = SCNNode(); amb.light = SCNLight(); amb.light?.type = .ambient; amb.light?.intensity = 400; scene.rootNode.addChildNode(amb)
+            scene.background.contents = NSColor(calibratedRed: 0.96, green: 0.97, blue: 0.98, alpha: 1)
+            let r = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil); r.scene = scene; r.pointOfView = cam
+            return r.snapshot(atTime: 0, with: CGSize(width: cell.width, height: cell.height - 40), antialiasingMode: .multisampling4X)
+        }
+        sheet.lockFocus()
+        NSColor.white.setFill(); NSRect(origin: .zero, size: sheet.size).fill()
+        for (i, step) in flow.steps.enumerated() {
+            let col = i % cols, row = i / cols
+            let origin = NSPoint(x: CGFloat(col) * cell.width, y: sheet.size.height - CGFloat(row + 1) * cell.height)
+            let items: [(PoseView.Shape, simd_quatd, CGFloat)] = step.who == .pair
+                ? [(.joyConLeft, left[i], -0.035), (.joyConRight, right[i], 0.035)] : [(.joyConRight, right[i], 0)]
+            render(items).draw(in: NSRect(x: origin.x + 4, y: origin.y + 40, width: cell.width - 8, height: cell.height - 44))
+            let text = "\(i + 1). " + step.hant + "\n" + step.en
+            (text as NSString).draw(in: NSRect(x: origin.x + 8, y: origin.y + 2, width: cell.width - 16, height: 38),
+                                    withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.black])
+        }
+        sheet.unlockFocus()
+        let png = NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+        try png.write(to: URL(fileURLWithPath: out))
     }
 }

@@ -403,18 +403,21 @@ struct ControllerTestStep: Equatable {
         case .pair: return selected?.isPair == true
         }
     }
+    /// 某一步做完时的姿态 = 下一步开始时记下的
+    private func endPose(of id: String, side: String) -> simd_quatd? {
+        guard let i = flow.steps.firstIndex(where: { $0.id == id }) else { return nil }
+        return stepStarts[i + 1]?[side]
+    }
     /// 这一边这一步的目标姿态（淡色模型）；没有目标 / 还没有姿态就 nil
     func ghost(for channel: Channel) -> simd_quatd? {
         guard let step, stepFitsSelection, channel.rawPose.started else { return nil }
         let side = channel.side
         switch step.target {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
-        case let .rotate(axis, degrees):
-            guard let start = stepStarts[stepIndex]?[side] else { return nil }
-            return ControllerTestFlow.rotated(start, axis, degrees: degrees)
-        case .back:
-            guard let start = stepStarts[stepIndex - 1]?[side] else { return nil }
-            return start
+        case let .rotate(axis, degrees, from):
+            guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
+            return ControllerTestFlow.rotated(base, axis, degrees: degrees)
+        case let .back(to): return endPose(of: to, side: side)
         case .manual: return nil
         }
     }
