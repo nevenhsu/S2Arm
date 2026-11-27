@@ -7,6 +7,10 @@ cd "$(dirname "$0")/.." || exit 2
 out=$(bash services/test.sh 2>&1); rc=$?
 echo "$out" | grep -E "✗" | head -20
 summary=$(echo "$out" | grep -E "^共 " | tail -1)
+solo=$(echo "$out" | grep -E "^服务专项汇总：" | tail -1); solo=${solo#服务专项汇总：}
 [ -n "$summary" ] || echo "$out" | tail -20 | sed 's/^/  | /'   # 没汇总行 = 编译或运行失败：打出末尾，门禁日志里就能看到原因
-echo "服务层单测：期望 全部符合 → 真结果 ${summary:-没有汇总行（编译或运行失败）}"
+# 射程两段都报（11-27 维护者：加了专项「共 N 项」不变，报绿看不出专项跑了几个）：主测试一个进程的汇总 + 独立进程的专项个数。
+#   专项先跑、有失败就不跑主测试：主测试写「没跑（专项先失败）」
+if [ -z "$summary" ] && [ -n "$solo" ] && [ "${solo#*失败}" != "$solo" ]; then main="没跑（专项先失败）"; else main=${summary:-没有汇总行（编译或运行失败）}; fi
+echo "服务层单测：期望 全部符合 → 真结果 主测试 ${main}；专项 ${solo:-没有汇总行（编译或运行失败）}"
 exit $rc

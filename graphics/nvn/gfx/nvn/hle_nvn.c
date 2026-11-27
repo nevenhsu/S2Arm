@@ -1888,10 +1888,11 @@ static const uint16_t g_dev_bytes[OP_COUNT_] = {
     [OP_END] = 8, [OP_CALL] = 16, [OP_SET_RT] = 96, [OP_BIND_PROGRAM] = 64, [OP_BIND_TEX1] = 24, [OP_DRAW] = 32, [OP_DRAW_IDX] = 48, [OP_DRAW_TEX] = 64,
     [OP_DISPATCH] = 48, [OP_COPY_B2T] = 64, [OP_COPY_T2B] = 64, [OP_COPY_T2T] = 64, [OP_CLEAR_TEX] = 48, [OP_SET_TEX_POOL] = DEV_CTL, [OP_SET_SAMP_POOL] = DEV_CTL, [OP_BIND_STATE] = DEV_STATE,
 };
-// 带索引绘制按入口取驱动真值（draw_elements 设置），不走上表的 Maxwell 估算；间接绘制不是这三个入口，仍查表（0 = 查表）
-static __thread uint32_t t_dev_draw_idx;
+// 按入口取驱动真值的记录（带索引绘制、DrawMeshTasks、NVN2 的顶点属性 / 顶点流状态；DEV_EXACT 包住那一条记录）不走上表的估算：入口在录这一条前设好 op 与字节，录完清零（0 = 查表）
+static __thread uint32_t t_dev_op, t_dev_bytes;
+#define DEV_EXACT(op, bytes, ...) do { t_dev_op = (op); t_dev_bytes = (bytes); __VA_ARGS__; t_dev_bytes = 0; } while (0)
 static uint32_t dev_bytes(uint32_t op, uint32_t size) {
-    if (op == OP_DRAW_IDX && t_dev_draw_idx) return t_dev_draw_idx;
+    if (t_dev_bytes && op == t_dev_op) return t_dev_bytes;
     if (op == OP_END) return 0;   // 驱动的 EndRecording 只写控制内存，不推进 cmd[0]（NVN1 / NVN2 同；sh_anchor_empty 给空录制留释放锚点）
     uint32_t d = op < OP_COUNT_ ? g_dev_bytes[op] : 0; return d == DEV_CTL ? 0 : d ? d : size; }
 #define DEV_LEND (16u << 10)   // device bytes of a host-lent window (the game gave no memory): the callback is asked again only after this many
@@ -2540,13 +2541,24 @@ NVN(nvnCommandBufferBindChannelMaskState, void, NVNcommandBuffer *c, const NVNch
 NVN(nvnCommandBufferBindMultisampleState, void, NVNcommandBuffer *c, const NVNmultisampleState *st) { bind_state(c, 3, st, sizeof(ms_st)); }
 NVN(nvnCommandBufferBindPolygonState, void, NVNcommandBuffer *c, const NVNpolygonState *st) { bind_state(c, 4, st, sizeof(poly_st)); }
 NVN(nvnCommandBufferBindDepthStencilState, void, NVNcommandBuffer *c, const NVNdepthStencilState *st) { bind_state(c, 5, st, sizeof(ds_st)); }
+// 设备字节：NVN2 按驱动真值（SDK 22 的 sdk 反汇编 cmd[0] 的推进），NVN1 仍按记录大小（NVN1 驱动这两条比宿主记录还大，四个属性 68、两个流 72，不往上调）。
+//   属性：一条方法 = 8 字节头 + 每个属性 4 字节，个数补成偶数。宿主记录多 first / n 两个字段，一律多报 8（四个属性 32 → 24）。
+//   流：步长一条方法（8 + 每个流 4，补成偶数）+ 除数一条方法（8 + 前 m 个流各 4，补成偶数；m = 最后一个除数非 0 的流号 + 1，没有则 0）。两个流、除数全 0 时 32 → 24。
+//   游戏会用这个读数定堆：一款体育游戏给每个 shape 录最多 23 种顶点状态（属性 + 流 + 每个流一次 BindVertexBuffer），把各次 GetCommandMemoryUsed 加进 shape 的预录命令大小，
+//   再算进 GPU 块的提示大小，按 4 KB 进位后从按真机校准的模型堆里取；多报让块多占一页，模型堆放不下块描述，比赛中途拿空内存池建的 buffer 崩溃
 NVN(nvnCommandBufferBindVertexAttribState, void, NVNcommandBuffer *c, int n, const NVNvertexAttribState *st) {
     if (n < 0 || n > 16) { LOG("【红】 BindVertexAttribState n=%d", n); return; }
-    p_bind_vattr *r = RECN(c, OP_BIND_VATTR, p_bind_vattr, st, n); r->first = 0; r->n = n; memcpy(r->st, st, 4 * n);
+    uint32_t drv = nvn2_on() ? 8 + 4 * (uint32_t)(n + (n & 1)) : 0;
+    DEV_EXACT(OP_BIND_VATTR, drv, p_bind_vattr *r = RECN(c, OP_BIND_VATTR, p_bind_vattr, st, n); r->first = 0; r->n = n; memcpy(r->st, st, 4 * n));
 }
 NVN(nvnCommandBufferBindVertexStreamState, void, NVNcommandBuffer *c, int n, const NVNvertexStreamState *st) {
     if (n < 0 || n > 16) { LOG("【红】 BindVertexStreamState n=%d", n); return; }
-    p_bind_vstream *r = RECN(c, OP_BIND_VSTREAM, p_bind_vstream, st, n); r->first = 0; r->n = n; memcpy(r->st, st, 8 * n);
+    uint32_t drv = 0;
+    if (nvn2_on()) {
+        int m = 0; for (int i = 0; i < n; i++) if (((const vs_st *)st)[i].divisor) m = i + 1;
+        drv = 16 + 4 * (uint32_t)(n + (n & 1)) + 4 * (uint32_t)(m + (m & 1));
+    }
+    DEV_EXACT(OP_BIND_VSTREAM, drv, p_bind_vstream *r = RECN(c, OP_BIND_VSTREAM, p_bind_vstream, st, n); r->first = 0; r->n = n; memcpy(r->st, st, 8 * n));
 }
 NVN(nvnCommandBufferBindVertexBuffers, void, NVNcommandBuffer *c, int first, int n, const NVNbufferRange *rg) {
     if (n < 0 || first + n > 16) { LOG("【红】 BindVertexBuffers first=%d n=%d", first, n); return; }
@@ -2622,7 +2634,12 @@ NVN(nvnCommandBufferDrawTexture, void, NVNcommandBuffer *c, NVNtextureHandle h, 
 NVN(nvnCommandBufferDrawArraysIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress ind) { rec_draw(c, (p_draw){pr, 0, 0, 1, 0, GA(ind)}); }
 // NVN2 任务 / 网格绘制（11-05 时之笛进 3D 场景）：count 个工作组从 first 起——有任务着色器时是任务工作组，没有时是网格工作组。录成图元 DM_PRIM_MESH_TASKS 的绘制（nvn2_cmd.h），
 //   回放 nvn_geometry.inc mesh_tasks_draw；间接版的 {工作组数, 起始号} 由 GPU 写在 ind，回放时在 GPU 上换成 Metal 的间接网格参数（nvn_mtl.m ixc_run），不在录制 / 回放时读
-NVN_NOPROTO(nvnCommandBufferDrawMeshTasks, void, NVNcommandBuffer *c, int first, int count) { rec_draw(c, (p_draw){DM_PRIM_MESH_TASKS, first, count, 1, 0, 0}); }
+// 设备字节按驱动真值 12：NVN2 驱动的 DrawMeshTasks 只写一条方法头加 2 个数据字（cmd[0] 进 0xc，SDK 22 的 sdk 反汇编），表里 OP_DRAW 的 32 多报 20。
+//   游戏会用这个读数定堆：一款体育游戏录一笔 DrawMeshTasks 量网格材质的预录命令，加进 GPU 块的提示大小，按 4 KB 进位后从按真机校准的模型堆里取；
+//   连同顶点属性 / 顶点流状态的多报（见 nvnCommandBufferBindVertexAttribState），提示越过 4 KB 进位 0xc 字节，块多占一页，随后 1016 字节的块描述配不到，模型拿空内存池建 buffer，比赛中途 memcpy 到空地址崩溃
+NVN_NOPROTO(nvnCommandBufferDrawMeshTasks, void, NVNcommandBuffer *c, int first, int count) {
+    DEV_EXACT(OP_DRAW, 12, rec_draw(c, (p_draw){DM_PRIM_MESH_TASKS, first, count, 1, 0, 0}));
+}
 NVN_NOPROTO(nvnCommandBufferDrawMeshTasksIndirect, void, NVNcommandBuffer *c, NVNbufferAddress ind) { rec_draw(c, (p_draw){DM_PRIM_MESH_TASKS, 0, 0, 1, 0, GA(ind)}); }
 // 三个带索引绘制入口共用。drv_bytes：游戏自带驱动该入口实际写入命令内存的字节（NVN2：反汇编各入口推进 cmd[0] 的立即数，SDK 20.5 / 21.4 / 22 与 Sports Resort 的 sdk 一致；
 //   NVN1 同值：#1904 帖主在 ARM64 解释器里跑旷野之息自带的 NVN1 驱动，DrawElements 24、BaseVertex 48 / 72、Instanced 44 / 48、EndRecording 0，与这组逐项相同）。
@@ -2631,9 +2648,7 @@ NVN_NOPROTO(nvnCommandBufferDrawMeshTasksIndirect, void, NVNcommandBuffer *c, NV
 //   NVN1 原先仍按 Maxwell 估算（一律 48 + END 8）：旷野之息按它给模型预录绘制定资源堆，东格鲁德遗迹石像 18 个网格多报 180 字节。#1904（1.9.0，iPad）读档时这个模型的资源堆 120 字节登记节点分配失败（main+0x155a7a4），多报是嫌疑；
 //   本地只有 1.8.2（同一段代码在 main+0x1446604），同一存档修前修后都能进场景，没复现出因果
 static void draw_elements(NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib, int bv, int bi, int inst, uint32_t drv_bytes) {
-    t_dev_draw_idx = drv_bytes;
-    rec_draw_idx(c, (p_draw_idx){pr, it, n, bv, bi, inst, GA(ib)});
-    t_dev_draw_idx = 0;
+    DEV_EXACT(OP_DRAW_IDX, drv_bytes, rec_draw_idx(c, (p_draw_idx){pr, it, n, bv, bi, inst, GA(ib)}));
 }
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {

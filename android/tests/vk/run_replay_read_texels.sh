@@ -25,7 +25,7 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -Wno-address -DS2
     -I "$repo/android/tests/vkhost" -I "$repo/graphics/nvn/third_party/vulkan-headers/include" \
     -I "$repo/graphics/nvn" -I "$repo/graphics/nvn/replay" -I "$repo/graphics/nvn/gfx/nvn" \
     -I "$repo/graphics/nvn/gfx/nvn/include" -I "$repo/android/native" -I "$repo/android/native/nvn" -I "$repo/android/native/direct" \
-    "$repo/android/tests/vk/t_replay_read_texels.c" \
+    "$repo/android/tests/vk/t_replay_read_texels.c" "$repo/graphics/nvn/replay/rp_copy_t2b.c" \
     "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" \
     "$repo/android/native/nvn/nvn_vk_format.c" "$repo/graphics/nvn/gfx/nvn/nvn_fmt_expand.c" "$repo/graphics/nvn/gfx/nvn/nvn_tex.c" \
     "$repo/android/native/nvn/nvn_vk_bcdec.c" "$repo/android/native/nvn/nvn_vk_driver_cache.c" "$repo/android/native/direct/sha256.c" \

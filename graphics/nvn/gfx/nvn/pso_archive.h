@@ -49,7 +49,11 @@ static int par_may_write(void) {
 //      时总线错——Metal 在序列化失败路径上交回的 error 指针是失效的（返回那一刻就坏，不是我们自动释放池排空后才读）。根修：写归档的几个调用不取 error（见 par_write_batch），
 //      失败只看返回值；全机标记不再记、不再读，老版本留下的标记起局删掉（这台机从此照常写）。全机标记涉及 macOS 15.1 / 15.3、iOS 26.0 / 27.2 / 27.2.1 共 6 个构建，不是某一版独有
 static char g_par_os_key[192];
-static int par_os_gate(int ios, long major, long minor) { return ios && major == 18 && minor < 4; }
+//   ③ macOS 15.0–15.3 不写（11-27，诊断 D-K7DM / D-TWC9 / D-694R）：与 iOS 18.0–18.3 同一代系统，崩在同一处——serializeToURL → airntSerializeToURL →
+//      materializeAirNTFromOnlineForSlice 里 objc_retain / objc_msgSend / dispatch_retain 失效对象（Metal 自己的缺陷，不经我们读 error，上面的根修管不到）。
+//      诊断库 Mac 按系统版本：15.2 / 15.3 共 3 份（M1 Max / M3 / M4，三款游戏）每局都崩、0 份写成；15.6 写成 8 份、15.7 39 份、0 崩。15.4 / 15.5 没有样本，
+//      按 iOS 18.4 已修的同代版本放行；15.1 有 1 份写成，但旧全机标记里记过 15.1 真崩，同代一并不写
+static int par_os_gate(int ios, long major, long minor) { return (ios && major == 18 && minor < 4) || (!ios && major == 15 && minor < 4); }
 static int par_dead_cleanup(NSString *as_dir) {   // 老版本的全机标记删掉；删了回 1（单测直接调，传临时目录）
     NSString *dead = [[as_dir stringByAppendingPathComponent:@"S2Arm"] stringByAppendingPathComponent:@"pso_archive_dead.txt"];
     if (unlink(dead.fileSystemRepresentation) != 0) return 0;
@@ -63,7 +67,7 @@ static void par_global_init(void) {
 }
 // ① 命中返回 1（并打一行原因）。单测直接调
 static int par_gate_or_learned(int ios, long major, long minor) {
-    if (par_os_gate(ios, major, minor)) { MLOG("【黄】 pipeline archive: iOS %ld.%ld: Metal's archive writer crashes on iOS 18.0–18.3 (#756, player diagnoses): reading it as usual, writing nothing", major, minor); return 1; }
+    if (par_os_gate(ios, major, minor)) { MLOG("【黄】 pipeline archive: %s %ld.%ld: Metal's archive writer crashes on iOS 18.0–18.3 / macOS 15.0–15.3 (#756, player diagnoses): reading it as usual, writing nothing", ios ? "iOS" : "macOS", major, minor); return 1; }
     return 0;
 }
 static void par_check_dead_write(void) {   // 起局（打开归档目录时）调：版本先验或崩溃处理器记过真崩 → 这个系统版本不再写；老版本的 .writing 标记删掉
@@ -76,6 +80,7 @@ static void par_check_dead_write(void) {   // 起局（打开归档目录时）�
         MLOG("【黄】 pipeline archive: removed a .writing marker from an older build (left by any death while writing: a swipe, a memory kill, a suspension kill — not proof of a crash in Metal): writing again; a real crash in the writer is recorded by the crash handler (#756)");
 }
 static const char *g_par_harvest;                                        // S2A_PSO_HARVEST: the folder the harvest writes into (nvn_pso_harvest); writes at once instead of noting
+static _Atomic uint64_t g_par_compiled;   // 真现编的管线条数（不从随包 / 本机归档取；归档关着也计）：加载页按它分「优化」与「载入中」（loadprog.c）
 static _Atomic uint64_t g_par_hits, g_par_misses, g_par_written, g_par_write_failed, g_par_stale, g_par_ga_removed;
 static _Atomic uint64_t g_par_ser_failed;   // 序列化没成的批（Metal 返回失败；它的 error 不读，见 par_write_batch）
 static __thread int par_write_in_place;                                  // the prewarm's threads: what they compile is noted for writing (par_flush_bg)
@@ -608,6 +613,7 @@ static id<MTLRenderPipelineState> par_render_(MTLRenderPipelineDescriptor *d, NS
         par_drop(key);
     }
     if (key && g_par_on) par_count(0);
+    atomic_fetch_add(&g_par_compiled, 1);
     id<MTLRenderPipelineState> ps = [g_dev newRenderPipelineStateWithDescriptor:d error:e];
     if (ps && key && g_par_on && par_write_in_place) { if (g_par_harvest) par_write(key, d); else par_note(key, d); }
     return ps;
@@ -630,6 +636,7 @@ static id<MTLComputePipelineState> par_compute_(id<MTLFunction> fn, NSString *ke
         par_drop(key);
     }
     if (key && g_par_on) par_count(0);
+    atomic_fetch_add(&g_par_compiled, 1);
     id<MTLComputePipelineState> ps = [g_dev newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:e];
     if (ps && key && g_par_on && par_write_in_place) { if (g_par_harvest) par_write(key, d); else par_note(key, d); }
     return ps;

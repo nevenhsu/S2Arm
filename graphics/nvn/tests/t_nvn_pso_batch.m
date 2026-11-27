@@ -83,9 +83,13 @@ int main(void) { @autoreleasepool {
     // ⑬ #756 版本先验（期望按玩家诊断定的区间手写）：iOS 18.0–18.3 不写；18.4、17.7、26.0 与非 iOS 的 18.2 照写
     VERIFY(par_os_gate(1, 18, 0) && par_os_gate(1, 18, 3) && !par_os_gate(1, 18, 4) && !par_os_gate(1, 17, 7) && !par_os_gate(1, 26, 0) && !par_os_gate(0, 18, 2),
            "⑬ 版本先验：iOS 18.0 / 18.3 不写，18.4 / 17.7 / 26.0 / 非 iOS 18.2 照写");
+    // ⑬b macOS 同代（D-K7DM 15.2、D-TWC9 15.3.1、D-694R 15.3 每局崩在 airntSerializeToURL）：15.0 / 15.2 / 15.3 不写；15.4、15.6、14.7、26.0、27.3 照写；iOS 15.2 照写
+    VERIFY(par_os_gate(0, 15, 0) && par_os_gate(0, 15, 2) && par_os_gate(0, 15, 3) && !par_os_gate(0, 15, 4) && !par_os_gate(0, 15, 6) && !par_os_gate(0, 14, 7)
+           && !par_os_gate(0, 26, 0) && !par_os_gate(0, 27, 3) && !par_os_gate(1, 15, 2),
+           "⑬b 版本先验：macOS 15.0 / 15.2 / 15.3 不写，15.4 / 15.6 / 14.7 / 26.0 / 27.3 与 iOS 15.2 照写");
     // ⑭ 不再有「全机学习」：只剩版本先验（⑬）决定不写；非 18.0–18.3 的系统一律照写
-    VERIFY(!par_gate_or_learned(1, 26, 0) && !par_gate_or_learned(1, 27, 2) && !par_gate_or_learned(0, 15, 3) && par_gate_or_learned(1, 18, 2),
-           "⑭ 只有版本先验：iOS 26.0 / 27.2、macOS 15.3 照写，iOS 18.2 不写");
+    VERIFY(!par_gate_or_learned(1, 26, 0) && !par_gate_or_learned(1, 27, 2) && !par_gate_or_learned(0, 15, 7) && par_gate_or_learned(1, 18, 2) && par_gate_or_learned(0, 15, 3),
+           "⑭ 只有版本先验：iOS 26.0 / 27.2、macOS 15.7 照写，iOS 18.2、macOS 15.3 不写");
     if (failures) { printf("✗ t_nvn_pso_batch：%u 项里 %u 项不符\n", checks, failures); return 1; }
     printf("✓ t_nvn_pso_batch：%u 项全过（70 条管线写成 3 个批文件，按键全部取回；老版本的 .writing 与全机真崩标记都删掉、照常写；序列化失败不读 error、只计数；正常收局不留标记）\n", checks); return 0;
 } }

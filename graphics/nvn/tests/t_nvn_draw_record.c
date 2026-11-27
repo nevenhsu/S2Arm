@@ -1,6 +1,6 @@
 // 真实公开 NVN API 录制，同生产 draw_idx_rec / bind_vbuf_rec / bind_program_rec 解码；不提交 GPU 绘制。
 // 记录在录制自己的宿主块里（句柄 = 第一条记录），游戏给的命令内存逐字节不动；GetCommandMemoryUsed / Free 按设备字节（hle_nvn.c dev_bytes：
-// 绘制 32、带索引绘制按入口取驱动真值 DrawElements 24 / BaseVertex 48、72 / Instanced 44、48（间接仍 48）、渲染目标 96、绑程序 64、END 0，其余按记录大小）。混合格式交错检查字段与下一条记录边界；72B 命令内存验证设备口径正好用满不回调。
+// 绘制 32（DrawMeshTasks 取驱动真值 12）、带索引绘制按入口取驱动真值 DrawElements 24 / BaseVertex 48、72 / Instanced 44、48（间接仍 48）、渲染目标 96、绑程序 64、END 0，其余按记录大小）。混合格式交错检查字段与下一条记录边界；72B 命令内存验证设备口径正好用满不回调。
 #include "nvn_protos.h"
 #include "nvn_obj.h"
 #include "nvn2_cmd.h"   // OP_MULTI_DRAW / p_multi_draw（large_mdi）
@@ -418,6 +418,67 @@ static void large_mdi(void) {
     p_draw dt; const p_draw *dp = draw_rec(rec + 8, h.size, &dt); p_draw d = *dp; CHECK(d.ind == 0x123456780ull); CHECK(d.mdi_cnt == 0x234567890ull); CHECK(d.mdi_i == 0);
     API(nvnCommandBufferFinalize)(&cmd);
 }
+// DrawMeshTasks 的设备字节按驱动真值 12（NVN2 驱动只写一条方法头加 2 个数据字），不按表里 OP_DRAW 的 32；覆盖只在这一条，之后的 DrawArrays 仍查表 32
+static void mesh_tasks(void) {
+    void (*mesh)(NVNcommandBuffer *, int, int) = (void (*)(NVNcommandBuffer *, int, int))load("nvnCommandBufferDrawMeshTasks");
+    NVNcommandBuffer cmd; start(&cmd, 512);
+    mesh(&cmd, 3, 7);
+    CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == 12);
+    API(nvnCommandBufferDrawArrays)(&cmd, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
+    CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == 12 + 32);
+    mesh(&cmd, 0, 1);
+    CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == 12 + 32 + 12);
+    CHECK(API(nvnCommandBufferGetCommandMemoryFree)(&cmd) == 512 - (12 + 32 + 12));
+    uint8_t *rec = records(API(nvnCommandBufferEndRecording)(&cmd));
+    op_hdr h; memcpy(&h, rec, sizeof h); CHECK(h.op == OP_DRAW);
+    p_draw dt; const p_draw *d = draw_rec(rec + 8, h.size, &dt);
+    CHECK(d->prim == DM_PRIM_MESH_TASKS); CHECK(d->first == 3); CHECK(d->count == 7); CHECK(d->instances == 1);
+    CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == 12 + 32 + 12);   // END 0
+    untouched(0, 512);
+    API(nvnCommandBufferFinalize)(&cmd);
+}
+// 顶点属性 / 顶点流状态的设备字节：NVN2 按驱动真值（属性 8 + 4 × n，流 16 + 4 × n + 4 × m，n / m 各补成偶数，m = 最后一个除数非 0 的流号 + 1）；
+//   NVN1 仍按记录大小（属性 8 + 8 + 4 × n、流 8 + 8 + 8 × n，按 8 对齐）。平台标志由原生层读 NPDM 设（svc_mem.c s2a_npdm_ounce）：合成 NPDM 只填 META、
+//   ACID 偏移（+0x78）与 ACID 魔数（新一代平台在 ACID + 0x300，上一代在 + 0x200），同 vm_test.c case_npdm_ounce
+int s2a_npdm_ounce(const char *npdm);
+int s2a_platform_ounce(void);
+static void set_ounce(int on) {
+    char path[1024]; const char *td = getenv("TMPDIR"); snprintf(path, sizeof path, "%s/t_nvn_draw_record_npdm_XXXXXX", td && *td ? td : "/tmp");
+    int fd = mkstemp(path); CHECK(fd >= 0);
+    uint8_t buf[0x500] = {0}; uint32_t acid = 0x100; memcpy(buf, "META", 4); memcpy(buf + 0x78, &acid, 4); memcpy(buf + acid + (on ? 0x300 : 0x200), "ACID", 4);
+    CHECK(write(fd, buf, sizeof buf) == (ssize_t)sizeof buf); close(fd);
+    CHECK(s2a_npdm_ounce(path) == on); CHECK(s2a_platform_ounce() == on); unlink(path);
+}
+static void vertex_state(void) {
+    NVNvertexAttribState a[5]; NVNvertexStreamState s[3];
+    for (int i = 0; i < 5; i++) API(nvnVertexAttribStateSetDefaults)(&a[i]);
+    const struct { int ounce, na, ns, div_at; size_t attr, stream; } cases[] = {
+        {1, 4, 2, -1, 24, 24},   // 四个属性 8 + 16；两个流 16 + 8，除数全 0
+        {1, 5, 3, -1, 32, 32},   // 五个属性补成六个；三个流补成四个
+        {1, 4, 3, 1, 24, 40},    // 流 1 有除数：m = 2
+        {1, 4, 3, 2, 24, 48},    // 流 2 有除数：m = 3，补成 4
+        {0, 4, 2, -1, 32, 32},   // NVN1：记录大小
+        {0, 5, 3, 2, 40, 40},
+    };
+    for (size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
+        set_ounce(cases[k].ounce);
+        for (int i = 0; i < 3; i++) {
+            API(nvnVertexStreamStateSetDefaults)(&s[i]); API(nvnVertexStreamStateSetStride)(&s[i], 16 + 4 * i);
+            API(nvnVertexStreamStateSetDivisor)(&s[i], i == cases[k].div_at ? 2 : 0);
+        }
+        NVNcommandBuffer cmd; start(&cmd, 512);
+        API(nvnCommandBufferBindVertexAttribState)(&cmd, cases[k].na, a);
+        CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == cases[k].attr);
+        API(nvnCommandBufferBindVertexStreamState)(&cmd, cases[k].ns, s);
+        CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == cases[k].attr + cases[k].stream);
+        API(nvnCommandBufferBindVertexBuffer)(&cmd, 0, 0x123456780ull, 0x100);   // 单个顶点缓冲 24，与驱动相同，两种平台都不变
+        CHECK(API(nvnCommandBufferGetCommandMemoryUsed)(&cmd) == cases[k].attr + cases[k].stream + 24);
+        records(API(nvnCommandBufferEndRecording)(&cmd));
+        untouched(0, 512);
+        API(nvnCommandBufferFinalize)(&cmd);
+    }
+    set_ounce(0);
+}
 int main(void) {
     // 空着色器映射表：SetShaders 算出的键都查不到、不现译（本测只核记录与快照表，不建管线）
     char map[1024]; const char *td = getenv("TMPDIR"); snprintf(map, sizeof map, "%s/t_nvn_draw_record_XXXXXX", td && *td ? td : "/tmp");
@@ -430,7 +491,7 @@ int main(void) {
     API(nvnMemoryPoolBuilderSetFlags)(&pb, NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
     API(nvnMemoryPoolBuilderSetStorage)(&pb, memory, 65536);
     CHECK(API(nvnMemoryPoolInitialize)(&pool, &pb));
-    mixed(); large_mdi(); tight(); vertex_buffers(); viewports(); render_targets(); exact_grant(); program_bind(); program_builder(); memory_size(); memory_size_concurrent();
+    mixed(); large_mdi(); tight(); vertex_buffers(); viewports(); render_targets(); exact_grant(); program_bind(); program_builder(); memory_size(); memory_size_concurrent(); mesh_tasks(); vertex_state();
     API(nvnMemoryPoolFinalize)(&pool); API(nvnDeviceFinalize)(&device); free(memory); unlink(map);
     printf("✓ t_nvn_draw_record：%u 条断言，记录在宿主块、游戏命令内存不动、已用按设备字节，混合draw/VB解码与72B正好用满、视口与渲染目标按实际内容录；回调按设备字节正好补所需不借窗口；BindProgram 32B 身份记录按序号还原、重设 / 终结 / 300 个新序号后仍取绑定当时快照；命令内存 Size 录制 / 换段 / 借窗口 / 并发读中恒为最近一次 AddCommandMemory 的段长\n", checks);
     return 0;

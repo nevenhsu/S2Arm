@@ -12,7 +12,8 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_stage, g_first_run, g_go;            // 阶段、首次、为什么不再等
 static _Atomic int g_skip;                        // 玩家点了「先开始玩」
 static int g_ff;                                  // 首帧已到、但预热还在等（页面先不收，预热结束时再收）
-static long g_done, g_total;
+static long g_done, g_total, g_compiled;         // g_compiled：这一局预热真现编的条数（直连层报，s2a_load_warm_compiled）
+static int g_loading;                             // 完整页显示「载入中」（之后的启动、从管线归档载入为主）
 static uint64_t g_t0, g_warm_t0, g_last_up;       // 起局、预热开始、已编数最近一次上涨
 static double g_rate;                             // 已编 / 秒，按 1 秒窗口指数平滑
 static uint64_t g_rate_t; static long g_rate_done;
@@ -26,13 +27,14 @@ static double env_s(const char *k, double d) { const char *e = getenv(k); double
 void s2a_load_begin(uint64_t now, int first_run) {
     pthread_mutex_lock(&g_mu);
     g_stage = S2A_LOAD_DATA; g_first_run = first_run; g_go = S2A_LOAD_GO_NONE; g_ff = 0; atomic_store(&g_skip, 0);
-    g_done = g_total = 0; g_t0 = now; g_warm_t0 = g_last_up = 0; g_rate = 0; g_rate_t = 0; g_rate_done = 0;
+    g_done = g_total = g_compiled = 0; g_loading = 0; g_t0 = now; g_warm_t0 = g_last_up = 0; g_rate = 0; g_rate_t = 0; g_rate_done = 0;
     g_frac = 0; g_eta_shown = -1; g_eta_t = g_slow_since = 0;
     pthread_mutex_unlock(&g_mu);
     atomic_store(&g_begun, 1);
 }
 
 void s2a_load_user_skip(void) { atomic_store(&g_skip, 1); }
+void s2a_load_warm_compiled(long n) { pthread_mutex_lock(&g_mu); if (n > g_compiled) g_compiled = n; pthread_mutex_unlock(&g_mu); }
 
 static void mark_warm_done(void);
 int s2a_load_warm_tick(uint64_t now, long done, long total) {
@@ -51,21 +53,29 @@ int s2a_load_warm_tick(uint64_t now, long done, long total) {
     // 编完按这一 tick 自己的参数判（done ≥ total）：直连层开头的 (0, n) 一定 n > 0（warm_announce / warm_prepare 只在有条目时发），done ≥ total 只出现在完成那一下——
     //   包括没有可预热的条目时的 (0, 0)（11-02 维护者 魔界战记5 首启：后台预热 0 条、0.6 ms 就收尾发了 (0, 0)，原先按「g_total 非 0」判，0 条永远不算编完，
     //   阶段停在「优化画面」、首帧来了也只记不收，之后再没有 tick、30 秒无进展护栏也跑不到，页面「已优化 0 / 0」卡死）
-    // 简短启动画面（之后的启动）还在优化画面里编了 3 秒仍没编完 = 这次其实要重编一大批（存进管线存档的只是一部分，或系统清了缓存）：
-    //   升成完整加载页，显示进度、给「先开始玩」（11-23 #2133：时之笛 4.7 万条，第二次打开在只有小转圈的画面后面重编，玩家看着卡死）。
-    //   「之后的启动」只是上次的预测，页面样式按这次实际要做的定
-    if (!g_first_run && done < total && now - g_warm_t0 >= (uint64_t)(env_s("S2A_LOAD_UPGRADE_S", 3) * S)) {
-        g_first_run = 1; up = 1;
-    }
+    // 简短启动画面（之后的启动）要不要换成完整加载页，看这一局实际要做什么（「之后的启动」只是上次的预测）：
+    //   ① 真要现编一批：进入优化画面满 S2A_LOAD_UPGRADE_S（3）秒、现编已到 S2A_LOAD_UPGRADE_COMPILED（200）条（存进管线归档的只是一部分，或系统清了缓存）
+    //      → 完整页「优化」，有进度、给「先开始玩」（11-23 #2133：一款 4.7 万条，第二次打开在只有小转圈的画面后面重编，玩家看着卡死）
+    //   ② 几乎全从管线归档载入、却载入很久：满 S2A_LOAD_SLOW_S（10）秒仍没完 → 完整页「载入中」（同样有进度和「先开始玩」，不说「优化」）。
+    //      11-26：原先只按 3 秒判，归档命中的载入也算「还要编」，大款（预热上万项，一款开放世界大作 3 万）每次启动都弹「为你的设备优化画面」，
+    //      玩家以为每次都在重新优化（实际归档全命中，0.6.9 同样要载 8–10 秒，只是显示简短画面）
+    //   「载入中」后面现编又够了（归档残缺）→ 改回「优化」
+    { double el = (double)(now - g_warm_t0) / S; long need = (long)env_s("S2A_LOAD_UPGRADE_COMPILED", 200);
+      if (!g_first_run && done < total) {
+          if (el >= env_s("S2A_LOAD_UPGRADE_S", 3) && g_compiled >= need) { g_first_run = 1; g_loading = 0; up = 1; }
+          else if (el >= env_s("S2A_LOAD_SLOW_S", 10)) { g_first_run = 1; g_loading = 1; up = 2; }
+      } else if (g_loading && done < total && g_compiled >= need) { g_loading = 0; up = 3; } }
     if (done >= total) { g_go = S2A_LOAD_GO_DONE; go = 1; }
     else if (atomic_load(&g_skip)) { g_go = S2A_LOAD_GO_USER; go = 1; }
     else if (now - g_last_up >= (uint64_t)(env_s("S2A_LOAD_STALL_S", 30) * S)) { g_go = S2A_LOAD_GO_STALL; go = 1; }
     // 没有总时长上限（11-22 #502 玩家：「我没点就别进游戏，等是我的选择」）：编译还在往前走就一直等，玩家随时可点「先开始玩」；原先 30 秒到点硬进（11-06 马车8 页面看着卡住才加），
     //   那次的「看着卡住」由上面的无进展护栏和逐秒剩余时间兜住；直连层有前端时同样不再到点放行（nvn_mtl.m warm_prepare）
     if (go) g_stage = g_ff ? S2A_LOAD_DONE : S2A_LOAD_ENTER;   // 首帧早已到过（直连层先过首帧回调、后在首次提交里等预热）：预热一结束就收页
-    int reason = g_go; long d = g_done, t = g_total;
+    int reason = g_go; long d = g_done, t = g_total, c = g_compiled;
     pthread_mutex_unlock(&g_mu);
-    if (up) LOG("加载页：之后的启动却还要编 %ld / %ld 条，换成完整加载页（进度 + 先开始玩）", t - d, t);
+    if (up == 1) LOG("加载页：之后的启动却要现编（已现编 %ld 条，已编 %ld / %ld），换成完整加载页「优化」（进度 + 先开始玩）", c, d, t);
+    else if (up == 2) LOG("加载页：之后的启动从管线归档载入 %ld / %ld 条已超过 %.0f 秒（现编 %ld 条），换成完整加载页「载入中」（进度 + 先开始玩）", d, t, env_s("S2A_LOAD_SLOW_S", 10), c);
+    else if (up == 3) LOG("加载页：「载入中」又现编到 %ld 条（归档不全），改显示「优化」", c);
     if (go && reason != S2A_LOAD_GO_DONE)
         LOG("加载页：不再等预热（%s），已编 %ld / %ld，剩下的转后台", reason == S2A_LOAD_GO_USER ? "玩家点了先开始玩" : "长时间没有进展", d, t);
     return go && reason != S2A_LOAD_GO_DONE ? 1 : 0;   // 全部编完：直连层自己正常收尾（返回 0 不转后台）
@@ -103,7 +113,7 @@ static void mark_warm_done(void) {
 
 void s2a_load_snapshot(uint64_t now, s2a_load_view *v) {
     pthread_mutex_lock(&g_mu);
-    v->stage = g_stage; v->first_run = g_first_run; v->done = g_done; v->total = g_total; v->go_reason = g_go;
+    v->stage = g_stage; v->first_run = g_first_run; v->loading = g_loading; v->done = g_done; v->total = g_total; v->go_reason = g_go;
     // 进度：准备数据 0–5%（按 10 秒渐近，不到 5%）、优化画面 5–95%（已编 / 总数）、进入游戏 95–100%
     double f = g_stage == S2A_LOAD_DATA ? 0.05 * (1.0 - 1.0 / (1.0 + (double)(now - g_t0) / (10.0 * S)))
              : g_stage == S2A_LOAD_OPTIMIZE ? 0.05 + 0.90 * (g_total ? (double)g_done / (double)g_total : 0)
@@ -140,6 +150,7 @@ void s2a_load_eta_text(int s, char *out, size_t n) {
 
 // 没有加载页前端（没调过 s2a_load_begin：Mac / 安卓宿主）回 -1：直连层用自己的护栏（DM_PSO_PREPARE_STALL_MS / DM_PSO_PREPARE_MAX_MS），同弱定义
 int s2a_front_warm_tick(long done, long total) { return atomic_load(&g_begun) ? s2a_load_warm_tick(now_ns(), done, total) : -1; }
+void s2a_front_warm_compiled(long n) { if (atomic_load(&g_begun)) s2a_load_warm_compiled(n); }
 void s2a_front_warm_released(void) {
     if (!atomic_load(&g_begun)) return;
     pthread_mutex_lock(&g_mu);

@@ -3,10 +3,10 @@
 //   （时之笛 4,454 支，抽查一支是阴影深度比较）。现照上游参考实现（MIT）the reference port：池指针 + 宿主池表 + 已读位图 + 未写渲染目标不建 + 小贴图预建 + 表复用。
 // 着色器 = Dsh.cs PoolArrays 改写后的形状（tests/dmsh_pool_arrays_test.sh 核同一形状由改写产出、能编），走生产 dispatch + 真 Metal 设备。
 // 贴图：R32F，编号 id 的贴图每个纹素 = id + 0.5（小的 4x4；大的 2048 宽、高按 12 / 14 / 18 / 20 / 22 MB 取，各不相同）。期望按语义手写，与被测实现无关：
-//   ① 句柄 ≥ 32 读到正确贴图：贴图号 40、采样器号 40 → 40.5；贴图号 3 → 3.5
+//   ① 句柄 ≥ 32 读到正确贴图：首次走池一张不预建（#2269：只建马上要读的），第一次读 40、3 得占位 0.0；下一次提交折叠位图后 40、3 建出，读 3 得 3.5
 //   ② 位图置位：第一次派发读了 40、3、51、60 → 位图里这 4 位为 1；没读的 41、50 为 0
-//   ③ 折叠后只建被读的 + 每帧预建上限：首次走池按小到大预建，本帧 32 MB 放得下小贴图 + 12 MB + 14 MB（共约 26 MB），18 MB（50）/ 20 MB（51）不建，
-//      读 51 得占位 0.0；下一次提交折叠位图 → 51 建出、读得 51.5，同时 50（上次没读）仍不建、读得 0.0；再下一次 50 也建出、读得 50.5
+//   ③ 折叠后只建被读的：首次走池 0 张预建（12 / 14 / 18 / 20 MB 的 70 / 71 / 50 / 51 都不建、读 51 得占位 0.0）；下一次提交折叠位图 → 51 建出、读得 51.5，
+//      41 第一次读得 0.0，50（上次没读）仍不建、读得 0.0；再下一次 41、50 建出、读 50 得 50.5；从没读过的 70 / 71 三次提交后仍不建
 //   ④ 没被任何遍写过的渲染目标（COMPRESSIBLE，60）读到也不为读而建：两次读都是 0.0、始终没建；同样大小的普通贴图（61）读得 61.5
 //   ⑤ 已读贴图每帧上限 128 MB：本帧已记满时，GPU 置了位的 52（22 MB）留在待建表、不建；记账清零后下一次提交建出、读得 52.5
 //   ⑥ 表增量维护（11-06 第 42 版：每次提交整表重走 + 新建表缓冲，19.7 帧 / 秒、低区地址空间耗尽）：之后几次提交里改登记 3 次，整表重走 0 次、新建表缓冲 0 张、
@@ -145,27 +145,31 @@ int main(void) { @autoreleasepool {
            "反射：tex_pool → TEXP、samp_pool → SAMPP、记成池 / 无绑定（%s）", cs ? "转换成功" : err);
     if (cs) {
         // 第一次提交：读 40（采样器 40）、3、51、60
-        uint64_t late0 = g_pool_seen_late;   // 「读到占位后才建」：40 / 3 / 41 预建了不算，60 是没写过的目标（跳过）不算；51、50 各算一次
+        uint64_t late0 = g_pool_seen_late;   // 「读到占位后才建」：第二次提交建 40、3、51（+3），第三次建 41、50（共 5）；60 是没写过的目标（跳过）不算
         read4(cs, 40u | 40u << 20, 3u | 1u << 20, 51u | 1u << 20, 60u | 1u << 20);
-        VERIFY(near(out4[0], 40.5f) && near(out4[1], 3.5f), "① 句柄 40（采样器 40）→ %.2f（期望 40.50）、句柄 3 → %.2f（期望 3.50）", out4[0], out4[1]);
+        VERIFY(near(out4[0], 0.0f) && near(out4[1], 0.0f), "① 首次走池不预建：第一次读 40（采样器 40）→ %.2f、3 → %.2f（期望占位 0.00、0.00）", out4[0], out4[1]);
         VERIFY(seen_bit(40) && seen_bit(3) && seen_bit(51) && seen_bit(60) && !seen_bit(41) && !seen_bit(50),
                "② 位图：40 %d、3 %d、51 %d、60 %d（期望全 1）；41 %d、50 %d（期望 0）", seen_bit(40), seen_bit(3), seen_bit(51), seen_bit(60), seen_bit(41), seen_bit(50));
-        VERIFY(made(70) && made(71) && !made(50) && !made(51) && near(out4[2], 0.0f),
-               "③ 首次走池预建到本帧 32 MB：12 MB %d、14 MB %d（期望 1）；18 MB %d、20 MB %d（期望 0）；读 51 → %.2f（期望占位 0.00）", made(70), made(71), made(50), made(51), out4[2]);
+        VERIFY(!made(70) && !made(71) && !made(50) && !made(51) && near(out4[2], 0.0f),
+               "③ 首次走池 0 张预建：12 MB %d、14 MB %d、18 MB %d、20 MB %d（期望 0、0、0、0）；读 51 → %.2f（期望占位 0.00）", made(70), made(71), made(50), made(51), out4[2]);
         // 第二次提交：折叠位图 → 51 建；50 上次没读，仍不建
         read4(cs, 51u | 1u << 20, 41u | 1u << 20, 50u | 1u << 20, 60u | 1u << 20);
         uint64_t late51 = g_pool_seen_late - late0;
-        VERIFY(made(51) && near(out4[0], 51.5f) && !made(50) && near(out4[2], 0.0f) && near(out4[1], 41.5f),
-               "③ 折叠后只建被读的：51 已建 %d、读得 %.2f（期望 1、51.50）；50 已建 %d、读得 %.2f（期望 0、0.00）；41 → %.2f（期望 41.50）", made(51), out4[0], made(50), out4[2], out4[1]);
+        VERIFY(made(51) && near(out4[0], 51.5f) && !made(50) && near(out4[2], 0.0f) && near(out4[1], 0.0f) && made(40) && made(3),
+               "③ 折叠后只建被读的：51 已建 %d、读得 %.2f（期望 1、51.50）；50 已建 %d、读得 %.2f（期望 0、0.00）；41 第一次读 → %.2f（期望 0.00）；40 / 3 已建 %d%d（期望 11）",
+               made(51), out4[0], made(50), out4[2], out4[1], made(40), made(3));
         read4(cs, 50u | 1u << 20, 60u | 1u << 20, 61u | 1u << 20, 3u | 1u << 20);
-        VERIFY(made(50) && near(out4[0], 50.5f), "③ 再下一次：50 已建 %d、读得 %.2f（期望 1、50.50）", made(50), out4[0]);
-        VERIFY(late51 == 1 && g_pool_seen_late - late0 == 2, "③ 读到占位后才建：建 51 那次 +%llu（期望 1）、建 50 后共 %llu（期望 2）",
+        VERIFY(made(50) && near(out4[0], 50.5f) && made(41) && near(out4[3], 3.5f) && !made(70) && !made(71),
+               "③ 再下一次：50 已建 %d、读得 %.2f（期望 1、50.50）；41 已建 %d（期望 1）；读 3 得 %.2f（期望 3.50）；从没读过的 70 / 71 已建 %d%d（期望 00：冷贴图 0 张被建）",
+               made(50), out4[0], made(41), out4[3], made(70), made(71));
+        VERIFY(late51 == 3 && g_pool_seen_late - late0 == 5, "③ 读到占位后才建：第二次提交 +%llu（期望 3：40、3、51）、第三次后共 %llu（期望 5：再加 41、50）",
                (unsigned long long)late51, (unsigned long long)(g_pool_seen_late - late0));
-        VERIFY(!made(60) && near(out4[1], 0.0f) && near(out4[2], 61.5f), "④ 没写过的渲染目标 60：已建 %d、读得 %.2f（期望 0、0.00）；普通贴图 61 → %.2f（期望 61.50）", made(60), out4[1], out4[2]);
+        VERIFY(!made(60) && near(out4[1], 0.0f) && near(out4[2], 0.0f), "④ 没写过的渲染目标 60：已建 %d、读得 %.2f（期望 0、0.00）；普通贴图 61 第一次读 → %.2f（期望占位 0.00）", made(60), out4[1], out4[2]);
         // ⑤ 本帧已读贴图记满 128 MB：GPU 置了 52 的位（这里直接置），下一次提交不建
         texture(52, W, 22 * MB / (W * 4), 0);
         ((uint32_t *)g_seen_buf.contents)[52 >> 5] |= 1u << (52 & 31);
         g_walk_req = POOL_REQ_BYTES;
+        g_live_spent = POOL_FRAME_BYTES;   // 本帧实时登记的额度也满：52 不在登记那一批建出，只看「读到即建」那一路的 128 MB
         read4(cs, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
         int todo52 = g_seen_todo[52 >> 5] >> (52 & 31) & 1;
         VERIFY(!made(52) && todo52, "⑤ 记满 128 MB：52 已建 %d（期望 0）、仍在待建表 %d（期望 1）", made(52), todo52);
@@ -184,8 +188,9 @@ int main(void) { @autoreleasepool {
                (unsigned long long)(g_pool_walks - w0), (unsigned long long)(g_pool_made - m0), one);
         // ⑦ 池基址 260：本地号 40 → 第 300 号
         S.tex_base = 260;
+        read4(cs, 40u | 1u << 20, 40u | 1u << 20, 40u | 1u << 20, 40u | 1u << 20);   // 300 第一次读：占位（不预建），下一次提交建出
         read4(cs, 40u | 1u << 20, 40u | 1u << 20, 40u | 1u << 20, 40u | 1u << 20);
-        VERIFY(near(out4[0], 300.5f), "⑦ 贴图池基址 260、句柄 40 → %.2f（期望 300.50）", out4[0]);
+        VERIFY(near(out4[0], 300.5f), "⑦ 贴图池基址 260、句柄 40 → 第二次读 %.2f（期望 300.50）", out4[0]);
         S.tex_base = 0;
         // ⑨ 跨提交换贴图（新登记的带 IMAGE：不归「首用取存储」，单测里每次解析都重传、资源号每次都变，比不出新旧）
         read4(cs, 40u | 40u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
@@ -344,6 +349,8 @@ int main(void) { @autoreleasepool {
         err[0] = 0; NvShader *ws = shader(IMG_SRC, refl_img, err, sizeof err);
         VERIFY(ws && ws->rf.b[1].kind == NVN_RB_TEXP && ws->rf.b[1].rw, "⑬a 反射：可写元素的 tex_pool → TEXP 且可写（%s）", ws ? "转换成功" : err);
         if (ws) {
+            // 新的一帧：「读到即建」那一路的单帧 128 MB 从零算（前面几项可能已记满；建表首次走池不再预建，122 只能经这一路建，#2269）
+            atomic_fetch_add(&g_cur_frame, 1); pool_walk_frame();
             float v9 = 9.0f, v7 = 7.0f; uint32_t u9, u7; memcpy(&u9, &v9, 4); memcpy(&u7, &v7, 4);
             read4(ws, 121u, u9, 0, 0);
             read4(cs, 121u | 1u << 20, 120u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
@@ -506,7 +513,7 @@ int main(void) { @autoreleasepool {
         //   A 14 → 剩 18；C 放不下一整帧，跳过、不挡后面；B1 5 → 13、B2 5 → 8、B3 5 → 3；B4 5 > 3 → 这一帧停、留到下一帧；再下一帧 B4 建，C 仍不建。
         //   原先从小到大：5 + 5 + 5 + 5 = 20、再加 A 14 = 34 > 32 → 只建到 5 MB 的，A 这一帧不建
         {
-            atomic_fetch_add(&g_cur_frame, 1); pool_walk_frame(); g_walk_spent = POOL_FRAME_BYTES;   // 本帧预建额度已花满
+            atomic_fetch_add(&g_cur_frame, 1); pool_walk_frame(); g_walk_spent = POOL_FRAME_BYTES; g_live_spent = POOL_FRAME_BYTES;   // 本帧预建额度已花满（实时登记那份也满）
             texture(380, W, 14 * MB / (W * 4), 0); texture(381, W, 33 * MB / (W * 4), 0);
             for (int k = 382; k <= 385; k++) texture(k, W, 5 * MB / (W * 4), 0);
             table_entry(3, 0, NULL);
@@ -517,6 +524,17 @@ int main(void) { @autoreleasepool {
             VERIFY(queued && a && !c && b1 && b2 && b3 && !b4 && made(385) && !made(381),
                    "⑲ 额度队列先进先出：花满那帧全排队 %d（期望 1）；下一帧 A %d、C %d、B1–B4 %d%d%d%d（期望 1、0、1110）；再下一帧 B4 %d、C %d（期望 1、0）",
                    queued, a, c, b1, b2, b3, b4, made(385), made(381));
+        }
+        // ⑲c 同一帧里补建不挤掉后到的实时登记（#2269 B）：上一帧额度满时登记的 Q（20 MB）在额度队列里；新一帧第一次取表 → 补建先把 Q 建出（花 20 MB）；
+        //   同一帧再登记 L（14 MB）→ 实时登记那份只记实时登记建的（0），32 MB 放得下 → L 当批建出。原先共用一份：剩 12 MB < 14 MB → L 被挤进队列
+        {
+            atomic_fetch_add(&g_cur_frame, 1); pool_walk_frame(); g_walk_spent = POOL_FRAME_BYTES; g_live_spent = POOL_FRAME_BYTES;
+            texture(391, W, 20 * MB / (W * 4), 0); table_entry(3, 0, NULL);
+            int q_queued = !made(391);
+            atomic_fetch_add(&g_cur_frame, 1); table_entry(3, 0, NULL);
+            int q = made(391);
+            texture(392, W, 14 * MB / (W * 4), 0); table_entry(3, 0, NULL);
+            VERIFY(q_queued && q && made(392), "⑲c 补建不挤实时登记：Q 先排队 %d、新一帧补建出 %d（期望 1、1）；同帧后到的 L 当批建出 %d（期望 1）", q_queued, q, made(392));
         }
     }
     // ⑱ pool_seen_scan 按串口分桶 + 永久空视图不空转：
@@ -589,6 +607,38 @@ int main(void) { @autoreleasepool {
                (unsigned long long)du_other, (unsigned long long)du_dirty_same_ep, (unsigned long long)du_own, (unsigned long long)du_dirty);
         serial_del(other_ser);
     }
+        // ⑳–㉒ 池持有、可回收（#2269：游戏登记后释放贴图对象、只经池读；主机上池描述符照样有效）。手算：
+        //   ⑳ 390 经池读过、建好后游戏释放对象 → 仍在序号表、不在已释放环、记为池持有；再读得 390.50
+        //   ㉑ 余量 100 MB、只有它闲置 → 被回收（序号表没了），池表那格是占位、下一次取表不建回来；之后第一次读得 0（占位）、第二次重建得 390.50
+        //   ㉒ 编号 390 改登记别的贴图 → 旧序号不再池持有、不在序号表（真正放了）
+        if (cs) {
+            atomic_fetch_add(&g_cur_frame, 1); pool_walk_frame(); g_walk_spent = 0;
+            texture(390, 4, 4, 0);
+            read4(cs, 390u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20); read4(cs, 390u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
+            uint64_t ser = texs[390].serial; REQUIRE(ser && made(390));
+            nvn_be_tex_release(&texs[390]);
+            pthread_mutex_lock(&g_smu); int in_tab = hm_get_id(&g_by_serial, &ser) != nil, in_ghost = hm_get_id(&g_ghost, &ser) != nil, held = nvn_hm_get(&g_pool_held, &ser) != NULL; pthread_mutex_unlock(&g_smu);
+            read4(cs, 390u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20); float r0 = out4[0];
+            VERIFY(in_tab && !in_ghost && held && near(r0, 390.5f), "⑳ 池持有：释放对象后在序号表 %d、在已释放环 %d、池持有 %d（期望 1、0、1）；读得 %.2f（期望 390.50）", in_tab, in_ghost, held, r0);
+            empty_sub(); empty_sub(); empty_sub();
+            g_tex_idle_subs = 2;
+            os_unfair_lock_lock(&g_rmu);
+            for (int i = 0; i < g_ntreg; i++) if (g_treg[i].ok) g_treg[i].used = g_fence + 1;
+            g_treg[390].used = 1;
+            os_unfair_lock_unlock(&g_rmu);
+            atomic_store(&g_mem_avail_fake, (int64_t)100 << 20); g_reclaim_next = 0; empty_sub();
+            atomic_store(&g_mem_avail_fake, -1); g_tex_idle_subs = TEX_IDLE_SUBS;
+            pthread_mutex_lock(&g_smu); int gone = hm_get_id(&g_by_serial, &ser) == nil; pthread_mutex_unlock(&g_smu);
+            uint64_t e = table_entry(390, 0, NULL); int dummy = e == g_ptab[0].dummy;
+            pthread_mutex_lock(&g_smu); int still_gone = hm_get_id(&g_by_serial, &ser) == nil; pthread_mutex_unlock(&g_smu);
+            read4(cs, 390u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20); float r1 = out4[0];
+            read4(cs, 390u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20); float r2 = out4[0];
+            VERIFY(gone && dummy && still_gone && near(r1, 0.0f) && near(r2, 390.5f),
+                   "㉑ 池持有的可回收：回收后不在序号表 %d、池表那格是占位 %d、取表后仍没建 %d（期望 1、1、1）；读到 %.2f、再读 %.2f（期望 0.00、390.50）", gone, dummy, still_gone, r1, r2);
+            texture(390, 4, 4, 0);
+            pthread_mutex_lock(&g_smu); int held2 = nvn_hm_get(&g_pool_held, &ser) != NULL, in_tab2 = hm_get_id(&g_by_serial, &ser) != nil; pthread_mutex_unlock(&g_smu);
+            VERIFY(!held2 && !in_tab2, "㉒ 登记换掉后旧序号真正放了：池持有 %d、在序号表 %d（期望 0、0）", held2, in_tab2);
+        }
     printf("%s t_nvn_pool_tex：%u 项，%u 项失败（追不到槽的句柄按编号读池：池表 + 已读位图 + 未写渲染目标不建 + 小贴图预建 + 表复用）\n", fails ? "✗" : "✓", checks, fails);
     return fails != 0;
 } }

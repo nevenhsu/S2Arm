@@ -538,7 +538,7 @@ def adopt_product(c):
     tmp = image / (layout.IOS_PACK + ".adopt")
     if tmp.exists():
         _rm(c, layout.root_of(c, gid), tmp)
-    # 逐个文件克隆进这款文件夹（core.clone：同一 APFS 卷 clonefile 不另占盘，跨卷 / Windows 退回普通复制），再同卷换（_swap_pack 用 os.replace）。
+    # 逐个文件克隆进这款文件夹（core.clone：同一 APFS 卷 clonefile 不另占盘，跨卷 / Windows 退回普通复制），再同卷换（_swap_pack 目录改名，带退避重试）。
     #   原先整份 copytree：测试链每台设备每款都多一整份资源包（11-19 一款大型开放世界游戏一份 17 GB，把内置盘写满）
     from core import clone
     shutil.copytree(src, tmp, copy_function=lambda s, d: clone(s, d))
@@ -557,9 +557,10 @@ def _swap_pack(c, gid, pack_dir, want):
     dest, old = image / layout.IOS_PACK, image / (layout.IOS_PACK + ".old")
     if old.exists():
         _rm(c, managed, old)
+    from programs import _rename_dir   # 目录改名按 #361 同一套退避重试（Windows 上杀软 / 资源管理器开着刚写完的文件时报 WinError 5 / 32，扫完会放开；#2292 这里原先一次被拒整单失败）
     if dest.exists():
-        os.replace(dest, old)
-    os.replace(pack_dir, dest)   # 同一款文件夹内改名（build/ios → image/ios）
+        _rename_dir(c, dest, old)
+    _rename_dir(c, pack_dir, dest)   # 同一款文件夹内改名（build/ios → image/ios）
     layout.hide(dest)
     if old.exists():
         _rm(c, managed, old)
@@ -633,7 +634,13 @@ def to_img(c, gid, root, pack_dir):
         if not isinstance(e, Failure):
             raise
         from errors import cause_facts, classify_failure, player_words, tool_reason
-        reason = "写单一 IMG（game.img）失败：" + (tool_reason(log) or str(e))  # 非玩家句
+        if e.code == "tool_exit":
+            # 退出码留在原因里（#2295：img.py 一行没打就退，原因只剩一行工具链记录，退出码 / 是否被信号结束都丢了）。c.run 已把信号折成 128 + 信号号
+            rc = getattr(c, "last_rc", None)
+            sig = f"，即被信号 {rc - 128} 结束、没来得及留下输出" if isinstance(rc, int) and 128 < rc < 160 and os.name != "nt" else ""  # 非玩家句
+            reason = "写单一 IMG（game.img）失败" + (f"（退出码 {rc}{sig}）" if rc is not None else "") + "：" + tool_reason(log)  # 非玩家句
+        else:   # 阶段超时、输出未关闭等：c.run 自己的话就是原因，不拿日志末行盖掉
+            reason = "写单一 IMG（game.img）失败：" + str(e)  # 非玩家句
         # 日志确凿根因（盘满等，errors.LOG_CAUSES）照归：原先一律 package_failed，玩家看到的是英文原句「[Errno 28] No space left on device」
         code, why = classify_failure("img", log, (reason,))
         if code == "package_failed" and re.search(r"\[Errno 13\]|\bPermissionError\b|\[WinError (?:5|32|33)\]", reason):

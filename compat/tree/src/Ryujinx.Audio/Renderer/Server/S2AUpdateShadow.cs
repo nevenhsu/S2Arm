@@ -131,6 +131,11 @@ namespace Ryujinx.Audio.Renderer.Server
         internal bool IsActiveSnapshot;        // 锁1 快照的 _isActive(效果 StoreStatus 读)
         internal readonly bool[] EffectIsNew;   // 效果段 IsNew(解析段独立扫输入;落账对 live 重放 InitializeResultState)
 
+        // NodeStates.Initialize 经 SpanMemoryManager<int>.Cast 把工作缓冲的地址存成裸指针（上游只给它不会搬的工作缓冲），
+        //   所以这块必须固定：普通 new byte[] 会被 GC 压缩搬走，之后每次排序都写回旧地址——旧地址已解除提交时当场 SIGBUS，
+        //   已被别的对象占用时悄悄写坏托管堆，等后台 GC 标记时才崩。分配在固定对象堆（POH），永不搬动
+        internal static byte[] S2ANodeStatesWorkBuffer(int mixCount) => GC.AllocateArray<byte>(NodeStates.GetWorkBufferSize(mixCount), pinned: true);
+
         internal S2AUpdateShadow(
             uint processHandle,
             Memory<MemoryPoolInfo> livePools,
@@ -230,7 +235,7 @@ namespace Ryujinx.Audio.Renderer.Server
             MixContext.Initialize(
                 new int[mixCount],
                 new MixInfo[mixCount],
-                new byte[NodeStates.GetWorkBufferSize(mixCount)],
+                S2ANodeStatesWorkBuffer(mixCount),
                 new byte[EdgeMatrix.GetWorkBufferSize(mixCount)]);
 
             // ---- 声音段记录 ----

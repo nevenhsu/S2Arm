@@ -1263,7 +1263,8 @@ class Context:
             self._batch_activity.clear()
         with self.last_log.open("a", encoding="utf-8") as out:
             if run_env.get("S2A_DEVELOPER_DIR"):
-                out.write("S2Arm frontend toolchain: DEVELOPER_DIR=" + run_env["DEVELOPER_DIR"] + "\n")
+                # [s2a] 开头：作业层自己记的，不是工具输出——工具一行没打就退（被信号结束）时，tool_reason 原先把这行当失败原因（#2295）
+                out.write("[s2a] S2Arm frontend toolchain: DEVELOPER_DIR=" + run_env["DEVELOPER_DIR"] + "\n")
                 out.flush()
             # 进度文件的起读位置在起子进程之前量：起了再量，机器忙时子进程可能已经写完退出，起读位置落在它写的行之后，
             #   这一步的进度一行都发不出（11-15 满载跑作业层全量：失败工具的最后进度读成 None）

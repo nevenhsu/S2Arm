@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 S2Arm contributors
+#version 450
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Faces { uint src[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer Packed { uint dst[]; };
+layout(push_constant) uniform Region { uint width; uint rows; uint stencil; } region;
+
+// 与 nvn_vk_depth_f32_to_24 同口径。乘 2^24 精确，不能直接用 float 乘 0xffffff 后加 0.5，
+// 否则靠近半整数或 1 时会二次舍入。f > 0.5 时 scaled 是整数，减 f 再加 0.5 会落到前一个整数。
+uint quantize(float f) {
+    if (isnan(f) || f <= 0.0) return 0u;
+    if (f >= 1.0) return 0xffffffu;
+    float scaled = f * 16777216.0;
+    return uint(scaled) + uint(fract(scaled) - 0.5 >= f) - uint(f > 0.5);
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    if (x >= region.width) return;
+    uint i = gl_GlobalInvocationID.y * region.width + x;
+    uint depth = quantize(uintBitsToFloat(src[i]));
+    uint high = 0u;
+    if (region.stencil != 0u) {
+        uint word = src[region.width * region.rows + (i >> 2)];
+        high = (word >> ((i & 3u) * 8u)) & 0xffu;
+    }
+    dst[i] = depth | (high << 24);
+}

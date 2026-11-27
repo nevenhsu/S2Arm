@@ -19,6 +19,11 @@ match = re.search(r'static void bc_copy_from_buf\([^;]+\);', src)
 if not match:
     raise RuntimeError('production bc_copy_from_buf declaration not found')
 bc_upload_signature = match.group(0)[:-1]
+d24 = (root / 'android/native/nvn/backend_vulkan_d24_readback.inc').read_text()
+match = re.search(r'static void d24_readback_copy\([^)]*\) \{', d24)
+if not match:
+    raise RuntimeError('production d24_readback_copy definition not found')
+d24_readback_signature = match.group(0)
 ledger = (root / 'android/native/nvn/backend_vulkan_cold_ledger.inc').read_text()
 match = re.search(r'static void cold_note_write\([^)]*\) \{', ledger)
 if not match:
@@ -46,6 +51,7 @@ preamble = r'''
 struct nvn_gpu_tex_s { uint32_t w,h,depth,levels,target,layers,format,nvn_format,aspect; VkImage image; int bc_decoded; };   /* bc_decoded：压缩贴图现解；本测试的贴图都不是 */
 struct nvn_gpu_buf_s { VkBuffer buffer; uint64_t size; };
 struct nvn_gpu_cmd_s { int sticky,in_pass,xfer_dirty; VkCommandBuffer cb; };
+static const struct { VkPipeline pipe; } g_d24_readback = {.pipe = VK_NULL_HANDLE};
 static int copies, bc_calls, bc_upload_calls; static VkBufferImageCopy last;
 static unsigned cold_writes;
 static struct {
@@ -77,6 +83,13 @@ bc_stub = bc_signature + r''' {
 bc_upload_stub = bc_upload_signature + r''' {
     (void)c; (void)t; (void)level; (void)layer; (void)r; (void)b; (void)off; (void)row_bytes; (void)image_bytes;
     bc_upload_calls++; set_sticky(c, NVN_GPU_E_UNSUPPORTED, "BC upload not implemented by bounds fixture");
+}
+'''
+# 夹具覆盖原生拷贝的深度边界，替换存储的转换由独立 Vulkan 用例覆盖。
+d24_readback_stub = d24_readback_signature + r'''
+    (void)t; (void)level; (void)layer; (void)region; (void)dst;
+    (void)dst_off; (void)row; (void)image_bytes;
+    set_sticky(c, NVN_GPU_E_UNSUPPORTED, "D24 conversion not implemented by bounds fixture");
 }
 '''
 # Record production's handoff to the write ledger at the fixture boundary.
@@ -159,7 +172,7 @@ with tempfile.TemporaryDirectory(prefix='copy-3d-depth-') as path:
         if (sysinc / name).exists(): (inc / name).symlink_to(sysinc / name)
     def run(name, stub, body, expected=None):
         c_file = d / (name + '.c'); exe = d / name
-        c_file.write_text(preamble + stub + bc_upload_stub + cold_write_stub + body + main)
+        c_file.write_text(preamble + stub + bc_upload_stub + d24_readback_stub + cold_write_stub + body + main)
         subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-I' + str(inc), '-I' + str(root/'graphics/nvn/gfx/nvn'),
                         '-I' + str(root/'graphics/nvn/gfx/nvn/include'),

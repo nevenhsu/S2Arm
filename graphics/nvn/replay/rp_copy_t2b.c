@@ -27,7 +27,11 @@ void rp_op_copy_t2b(nvn_gpu_cmd c, const p_copy_b2t *o, const void *rec) {
         nvn_unimpl("tex", "t2b_mode", rec); return;
     }
     nvn_fmt_info fi; int bw = 0, bh = 0, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-    if (!nvn_fmt_info_of((uint32_t)t->d.format, &fi) || !bpb || bw <= 0 || bh <= 0 || fi.depth || fi.stencil || fi.expand ||
+    if (!nvn_fmt_info_of((uint32_t)t->d.format, &fi) || !bpb || bw <= 0 || bh <= 0 || fi.expand) {
+        nvn_unimpl("tex", "t2b_format", rec); return;
+    }
+    const uint32_t exact_subst = NVN_GPU_FMT_SUBST | NVN_GPU_FMT_READBACK;
+    if (((fi.depth || fi.stencil) && (nvn_gpu_format_caps((uint32_t)t->d.format) & exact_subst) != exact_subst) ||
         ((bw > 1 || bh > 1) && !(nvn_gpu_format_caps((uint32_t)t->d.format) & NVN_GPU_FMT_SAMPLE))) {
         nvn_unimpl("tex", "t2b_format", rec); return;
     }

@@ -30,11 +30,11 @@ int main(void) {
     CASE("剩余时间文案逐秒：-1 估算中、3 不到 5 秒、42 → 42 秒、61 → 1 分 1 秒、80 → 1 分 20 秒、120 → 2 分钟", {
         WANT(eq(-1, "正在估算剩余时间")); WANT(eq(3, "不到 5 秒")); WANT(eq(42, "42 秒")); WANT(eq(61, "1 分 1 秒"));
         WANT(eq(80, "1 分 20 秒")); WANT(eq(120, "2 分钟")); });
-    CASE("之后的启动要重编（#2133）：优化画面开始后 2.9 秒仍是简短画面、不给先开始玩；满 3 秒还没编完 → 升成完整页、给先开始玩；之后不再降回", {
-        s2a_load_begin(0, 0); WANT(s2a_load_warm_tick(1 * S, 0, 46995) == 0);
+    CASE("之后的启动要重编（#2133）：现编已 300 条（≥ 200）；优化画面开始后 2.9 秒仍是简短画面、不给先开始玩；满 3 秒还没编完 → 升成完整页「优化」、给先开始玩；之后不再降回", {
+        s2a_load_begin(0, 0); WANT(s2a_load_warm_tick(1 * S, 0, 46995) == 0); s2a_load_warm_compiled(300);
         { s2a_load_view v = V(1 * S); WANT(v.first_run == 0 && v.can_skip == 0); }
         WANT(s2a_load_warm_tick(1 * S + 2900000000ull, 300, 46995) == 0); { s2a_load_view v = V(1 * S + 2900000000ull); WANT(v.first_run == 0 && v.can_skip == 0); }
-        WANT(s2a_load_warm_tick(4 * S, 400, 46995) == 0); { s2a_load_view v = V(4 * S); WANT(v.first_run == 1 && v.can_skip == 1 && v.stage == S2A_LOAD_OPTIMIZE); }
+        WANT(s2a_load_warm_tick(4 * S, 400, 46995) == 0); { s2a_load_view v = V(4 * S); WANT(v.first_run == 1 && v.loading == 0 && v.can_skip == 1 && v.stage == S2A_LOAD_OPTIMIZE); }
         WANT(s2a_load_warm_tick(5 * S, 46995, 46995) == 0); WANT(V(5 * S).first_run == 1); });
     CASE("之后的启动 3 秒内编完：一直是简短画面（不升级、不给先开始玩）", {
         s2a_load_begin(0, 0); WANT(s2a_load_warm_tick(1 * S, 0, 500) == 0);
@@ -92,8 +92,21 @@ int main(void) {
         WANT(V(10 * S).eta_s < 5 && V(10 * S).can_skip);
         s2a_load_user_skip(); WANT(s2a_load_warm_tick(10 * S + S / 20, 950, 1000) == 1);
         { s2a_load_view v = V(11 * S); WANT(v.go_reason == S2A_LOAD_GO_USER && v.stage == S2A_LOAD_ENTER && !v.can_skip); } });
-    CASE("之后的启动（简短启动画面没有按钮）：优化画面前 3 秒不出「先开始玩」；满 3 秒还没编完升成完整页才出（#2133）；第 10 秒编完不再出", {
-        s2a_load_begin(0, 0); for (uint64_t t = 0; t <= 10 * S; t += S / 2) { s2a_load_warm_tick(t, (long)(t / (S / 100)), 1000); WANT(V(t).can_skip == (t >= 3 * S && t < 10 * S)); } });
+    CASE("之后的启动（简短启动画面没有按钮）：每条都现编时，优化画面前 3 秒不出「先开始玩」；满 3 秒还没编完升成完整页才出（#2133）；第 10 秒编完不再出", {
+        s2a_load_begin(0, 0); for (uint64_t t = 0; t <= 10 * S; t += S / 2) { long d = (long)(t / (S / 100)); s2a_load_warm_compiled(d); s2a_load_warm_tick(t, d, 1000); WANT(V(t).can_skip == (t >= 3 * S && t < 10 * S)); } });
+    // 11-26（一款开放世界大作 iPhone 0.6.10「每次进游戏都要为你的设备优化画面」）：之后的启动归档全命中，载入几万条也被当成「还要编」升成「优化」页。期望按口径手写：
+    CASE("第二次起局归档全命中、载入 2.5 秒完（现编 0）：一直简短画面，不升级、待优化 0 项（不出「优化」也不出「载入中」）", {
+        s2a_load_begin(0, 0); for (uint64_t t = 0; t <= 3 * S; t += S / 2) { long d = t >= 2 * S + S / 2 ? 30000 : (long)(t / (S / 12000)); s2a_load_warm_compiled(0); s2a_load_warm_tick(t, d, 30000);
+            s2a_load_view v = V(t); WANT(v.first_run == 0 && v.loading == 0 && v.can_skip == 0); } });
+    CASE("归档全命中但载入慢（3000 条、100 条 / 秒、现编 0）：满 3 秒仍简短（不再按 3 秒升「优化」）；9.5 秒仍简短；满 10 秒还没完 → 完整页「载入中」、给先开始玩", {
+        s2a_load_begin(0, 0); for (uint64_t t = 0; t <= 12 * S; t += S / 2) { s2a_load_warm_compiled(0); s2a_load_warm_tick(t, (long)(t / (S / 100)), 3000);
+            s2a_load_view v = V(t); if (t < 10 * S) WANT(v.first_run == 0 && v.can_skip == 0); else WANT(v.first_run == 1 && v.loading == 1 && v.can_skip == 1); } });
+    CASE("「载入中」后现编到 200 条（归档不全）→ 改显示「优化」；现编 199 条时仍是「载入中」", {
+        s2a_load_begin(0, 0); s2a_load_warm_tick(0, 0, 3000); s2a_load_warm_tick(10 * S, 1000, 3000); WANT(V(10 * S).loading == 1);
+        s2a_load_warm_compiled(199); s2a_load_warm_tick(11 * S, 1100, 3000); WANT(V(11 * S).loading == 1 && V(11 * S).first_run == 1);
+        s2a_load_warm_compiled(200); s2a_load_warm_tick(12 * S, 1200, 3000); WANT(V(12 * S).loading == 0 && V(12 * S).first_run == 1); });
+    CASE("首次启动（完整页一开始就在）：不管现编多少都是「优化」，不显示「载入中」", {
+        s2a_load_begin(0, 1); for (uint64_t t = 0; t <= 12 * S; t += S / 2) { s2a_load_warm_compiled(0); s2a_load_warm_tick(t, (long)(t / (S / 100)), 3000); WANT(V(t).loading == 0); } });
     CASE("护栏：已编数 30 秒没涨 → 返回 1、原因 = 无进展；29.5 秒时还在等", {
         s2a_load_begin(0, 1); s2a_load_warm_tick(0, 0, 1000); s2a_load_warm_tick(1 * S, 10, 1000);
         WANT(s2a_load_warm_tick(30 * S + S / 2, 10, 1000) == 0);
@@ -125,5 +138,5 @@ int main(void) {
     CASE("没有加载页前端（没调过 s2a_load_begin）：s2a_front_warm_tick 回 -1；调过之后回 0 / 1", {
         WANT(s2a_front_warm_tick(0, 10) == -1); s2a_load_begin(0, 1); WANT(s2a_front_warm_tick(0, 10) == 0); });
     if (fails) { printf("✗ t_loadprog：%d 例不通\n", fails); return 1; }
-    printf("✓ t_loadprog：21 例全过\n"); return 0;
+    printf("✓ t_loadprog：27 例全过\n"); return 0;
 }

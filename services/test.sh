@@ -41,14 +41,19 @@ MD=$HERE/S2A.Services.Tests/bin; MJ=$(( $(sysctl -n hw.ncpu 2> /dev/null || echo
 for mode in $s2a_modes; do rm -f "$MD/${mode#--}.out.rc"; done
 printf '%s\n' $s2a_modes | xargs -P "$MJ" -I{} sh -c 'o="$2/${1#--}.out"; timeout 60 "$3" bin/Release/net10.0/S2A.Services.Tests.dll "$1" > "$o" 2>&1; echo $? > "$o.rc"' _ {} "$MD" "$DOTNET" \
   || { echo "服务专项：并行起进程失败（xargs 退出 $?）"; exit 1; }
+# 结论全部报完再判（11-27 维护者：门禁摘要要带专项射程——原先第一个失败就退，后面的专项没报、汇总行也没有）：每个专项一行，
+#   最后一行「服务专项汇总：M 个全部通过」或「M 个，失败 K 个：<模式…>」（services/gate.sh 并进摘要）；有失败照旧带第一个失败的退出码退出、不跑主测试
+s2a_n=0; s2a_fail=; s2a_rc=0
 for mode in $s2a_modes; do
-  OUT="$MD/${mode#--}.out"; rc=$(cat "$OUT.rc" 2> /dev/null || echo 1)
+  s2a_n=$((s2a_n + 1)); OUT="$MD/${mode#--}.out"; rc=$(cat "$OUT.rc" 2> /dev/null || echo 1)
   if [ "$rc" = 0 ]; then
     echo "服务专项 ${mode}：通过"
   else
-    echo "服务专项 ${mode}：失败（退出 ${rc}）"; tail -30 "$OUT"; exit "$rc"
+    echo "服务专项 ${mode}：失败（退出 ${rc}）"; tail -30 "$OUT"; s2a_fail="${s2a_fail:+$s2a_fail }$mode"; [ "$s2a_rc" = 0 ] && s2a_rc=$rc
   fi
 done
+if [ -n "$s2a_fail" ]; then echo "服务专项汇总：${s2a_n} 个，失败 $(echo $s2a_fail | wc -w | tr -d ' ') 个：${s2a_fail}"; exit "$s2a_rc"; fi
+echo "服务专项汇总：${s2a_n} 个全部通过"
 bash "$HERE/tests/t_native_provider.sh"
 # 运行墙钟 150 秒：着色器代码表新旧对拍（01006F8002326000 + 一款第一方动作冒险游戏真实语料约 44 万样本，上游旧表平方级建表）约 40 秒
 # 标准错误落本工作树的构建目录（10-21 原生层线：原先是全机固定名 $TMPDIR/s2a_svc_test.err，多棵工作树同时跑互相覆盖，查现场拿到的是别的树那份）；

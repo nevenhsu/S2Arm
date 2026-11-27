@@ -6,6 +6,7 @@
   ③ 取消 / 进程被杀（玩家报「romfs.s2aidx 里的 X 不在 game.img 的 RomFS 段」）：取消同样清空；被杀来不及清的，靠出包工作目录里的
      .img_consume_inflight 标记，下次出包开头（drop_half_consumed）清空；写成功标记删掉"""
 import os
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -104,6 +105,23 @@ class ImgConsume(JobCase):
                 self.assertEqual(e.exception.code, code)
                 self.assertIn(shown, str(e.exception))
                 self.assertIn(line, str(e.exception) + getattr(e.exception, "internal", ""))
+
+    def test_silent_exit_keeps_exit_code_not_toolchain_line(self):
+        # #2295：img.py 一行没打就被信号结束（退出码 137），img.log 里只有作业层自己记的工具链一行；原先失败原因就是这一行，退出码丢了。
+        #   期望（手写）：原因带「退出码 137」「信号 9」，不含工具链那行；没归出别的码 → package_failed。
+        #   日志里第一行按真的 c.run 写（Context.run 起子进程前那句），用的是 main 的写法时这一项不通过
+        c, out = self._work()
+        c.r["developerDir"] = "/X.app/Contents/Developer"
+        def fail(args, log, *a, **kw):
+            real = Context.run.__get__(c)
+            real([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"], log)
+        with patch.object(c, "run", side_effect=fail), self.assertRaises(Failure) as e:
+            ipa.to_img(c, GID, out / "roots/kuan@v1", out / "pack")
+        text = str(e.exception) + getattr(e.exception, "internal", "")
+        self.assertEqual(e.exception.code, "package_failed")
+        self.assertIn("退出码 137", text)
+        self.assertIn("信号 9", text)
+        self.assertNotIn("frontend toolchain", text)
 
     def test_other_jobs_img_output_not_mixed_in(self):
         # #1880：一款游戏的失败摘要里出现另一款的 IMG 路径。原先 logs/img.log 不分作业、追加写：前一款的输出（它的路径、它的盘满）

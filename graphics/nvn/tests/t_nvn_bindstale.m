@@ -3,6 +3,9 @@
 // 反证：子进程照旧实现那样对失效对象调 prog_get，必须死于信号（证明这个夹具真能复现崩溃，判据不会绿着失效）。
 #include "../gfx/nvn/nvn_mtl.m"
 #include <sys/wait.h>
+#include <spawn.h>
+#include <mach-o/dyld.h>
+extern char **environ;
 
 static unsigned failures, checks;
 #define VERIFY(c, ...) do { checks++; int ok_ = !!(c); if (!ok_) failures++; \
@@ -26,7 +29,27 @@ static void wreck(prog_t *p) {
     p->magic = 0x2020; p->serial = 0x00020200ffffffffull; p->nstage = 1; p->sd[0].control = junk; p->sd[0].data = 0x20200ffffffffull;
 }
 
-int main(void) {
+// 反证的子进程：本程序带 --stale-child 重新启动（posix_spawn = fork + 立刻 exec），在全新进程里搭同一个失效对象、走旧路径 prog_get。
+//   原先在本进程里 fork() 后直接调 prog_get：多线程进程 fork 后子进程只该调异步信号安全的函数（POSIX），Metal / 日志初始化后本进程已有别的线程，
+//   fork 那一刻谁拿着锁（序号表锁 g_smu、malloc、ObjC 运行时、日志），子进程就永远等那把锁、不占 CPU——11-27 门禁一次「300 秒无进展」挂死就是这个形态
+static int stale_child(void) {
+    @autoreleasepool {
+        static prog_t a; NvShader *vs_a = named("vs_a", 0), *fs_a = named("fs_a", 1);
+        put(&a, 9003, vs_a, fs_a); serial_del(9003); wreck(&a);   // 同 ③：a 已从序号表删掉、对象被复用成崩溃现场的野值
+        __unsafe_unretained NvProg *o = prog_get(&a);
+        _exit(o && o->sh[0] == vs_a ? 1 : 0);
+    }
+}
+static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER; static int g_hold_state;
+static void *hold_smu(void *arg) {   // 另一条线程拿住序号表锁，直到主线程说放
+    (void)arg; pthread_mutex_lock(&g_smu);
+    pthread_mutex_lock(&g_hold_mu); g_hold_state = 1; pthread_cond_broadcast(&g_hold_cv);
+    while (g_hold_state != 2) pthread_cond_wait(&g_hold_cv, &g_hold_mu);
+    pthread_mutex_unlock(&g_hold_mu); pthread_mutex_unlock(&g_smu); return NULL;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--stale-child")) return stale_child();
     @autoreleasepool {
         char map[] = "/tmp/t_bindstale_XXXXXX"; int fd = mkstemp(map); if (fd < 0) return 2; close(fd); setenv("DM_NVN_SHMAP", map, 1);   // 空映射表：替身程序没有阶段，不查表
         static prog_t a, b;
@@ -108,12 +131,23 @@ int main(void) {
         //   原先断言「子进程里必崩」：失效对象的代码区指针是 0x20200ffffffff，旧 prog_get 取键读野地址就崩。11-17 aad3c7407 起取键前先查游戏映射、
         //   读不了就不取键按缺阶段报，不再崩——崩不崩已不是旧路径错不错的判据。现在判结果：子进程里拿到 vs_a 退出 1（反证不成立），
         //   拿不到退出 0；照旧崩了也算旧路径取不回（子进程里做，崩了不连累本进程）
+        //   子进程用 posix_spawn 起本程序（见 stale_child），起的那一刻另一条线程正拿着序号表锁 g_smu：全新进程不继承这把锁，照常走完。
         fflush(stdout);
-        pid_t pid = fork();
-        if (pid == 0) { __unsafe_unretained NvProg *o = prog_get(&a); _exit(o && o->sh[0] == vs_a ? 1 : 0); }
-        int ws = 0; waitpid(pid, &ws, 0);
-        VERIFY(WIFSIGNALED(ws) || (WIFEXITED(ws) && WEXITSTATUS(ws) == 0), "反证：对失效对象 prog_get（旧实现的路径）取不回绑定时的 vs_a → %s",
-               WIFSIGNALED(ws) ? strsignal(WTERMSIG(ws)) : WEXITSTATUS(ws) == 0 ? "没取回（顶点阶段缺）" : "竟取回了 vs_a");
+        pthread_t th; pthread_create(&th, NULL, hold_smu, NULL);
+        pthread_mutex_lock(&g_hold_mu); while (g_hold_state != 1) pthread_cond_wait(&g_hold_cv, &g_hold_mu); pthread_mutex_unlock(&g_hold_mu);
+        //   形态核对（期望手写：fork 复制的是「锁被占着」的内存，子进程里试锁必然拿不到）：同样的时刻 fork，子进程只做 trylock 就退——
+        //   EBUSY 说明旧写法的子进程会在 prog_get → serial_get 里永远等这把锁
+        pid_t fk = fork();
+        if (fk == 0) _exit(pthread_mutex_trylock(&g_smu) == EBUSY ? 3 : 4);
+        int fs = 0; waitpid(fk, &fs, 0);
+        VERIFY(WIFEXITED(fs) && WEXITSTATUS(fs) == 3, "形态：别的线程拿着序号表锁时 fork，子进程里这把锁是占着的（旧写法会在 prog_get 里永远等它）→ %s",
+               WIFEXITED(fs) ? (WEXITSTATUS(fs) == 3 ? "占着" : "空着") : "子进程异常");
+        char self[PATH_MAX]; uint32_t sl = sizeof self; pid_t pid = -1; int ws = 0;
+        int sr = _NSGetExecutablePath(self, &sl) == 0 ? posix_spawn(&pid, self, NULL, NULL, (char *[]){self, "--stale-child", NULL}, environ) : -1;
+        if (sr == 0) waitpid(pid, &ws, 0);
+        pthread_mutex_lock(&g_hold_mu); g_hold_state = 2; pthread_cond_broadcast(&g_hold_cv); pthread_mutex_unlock(&g_hold_mu); pthread_join(th, NULL);
+        VERIFY(sr == 0 && (WIFSIGNALED(ws) || (WIFEXITED(ws) && WEXITSTATUS(ws) == 0)), "反证：对失效对象 prog_get（旧实现的路径）取不回绑定时的 vs_a（posix_spawn 起的子进程，序号表锁被别的线程拿着也不受影响）→ %s",
+               sr ? "起不了子进程" : WIFSIGNALED(ws) ? strsignal(WTERMSIG(ws)) : WEXITSTATUS(ws) == 0 ? "没取回（顶点阶段缺）" : "竟取回了 vs_a");
     }
     unlink(getenv("DM_NVN_SHMAP"));
     if (failures) printf("✗ t_nvn_bindstale：%u 项里 %u 项不过\n", checks, failures);   // 原生门禁按「✓ t_ / ✗ t_」逐组判（runtime/gate.sh）

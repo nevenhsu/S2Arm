@@ -81,6 +81,9 @@ static uint64_t g_deswizzle_count, g_deswizzle_bytes, g_deswizzle_fallbacks;
 static uint64_t g_deswizzle_reasons[5];
 static int deswizzle_open(void);
 static void deswizzle_close(void);
+static struct { VkDescriptorSetLayout dsl; VkPipelineLayout layout; VkPipeline pipe; } g_d24_readback;
+static int d24_readback_open(void);
+static void d24_readback_close(void);
 static struct { VkDescriptorSetLayout dsl; VkPipelineLayout layout; VkPipeline pipe; } g_bc1_astc;
 static void bc1_astc_close(void);
 static int bc1_astc_storage(uint32_t nvn_format, const nvn_gpu_tex_desc *d, VkImageType type,
@@ -2556,6 +2559,8 @@ nvn_gpu_rc nvn_gpu_open(const nvn_gpu_open_desc *d, nvn_gpu_err *err) {
     if (pthread_create(&g.worker, NULL, worker_main, &g) != 0)
         return fail(err, NVN_GPU_E_DEVICE, "worker 线程创建失败");
     g.worker_started = 1;
+    if (nvn_vk_format_depth_subst() && !d24_readback_open())
+        nvn_plat_log(NVN_PLAT_LOG_RED, "gpu", "D24 替换存储的回读转换管线创建失败");
     pthread_mutex_lock(&g_seg_mu); g_seg_closed = 0;
     g_seg_stg_std = nvn_plat_flag("nvk_stg_std", 1) != 0; g_seg_stg_hit = g_seg_stg_miss = g_seg_stg_kept = g_seg_stg_rej = g_seg_stg_full = 0;
     for (int i = 0; i < 6; i++) __atomic_store_n(&g_stg_wr[i], 0, __ATOMIC_RELAXED);
@@ -2577,18 +2582,19 @@ void nvn_gpu_caps_get(nvn_gpu_caps *out) {
 }
 
 // 贴图 → 缓冲回读的格式判断（nvn_gpu_copy_tex_buf 与 nvn_gpu_format_caps 的 NVN_GPU_FMT_READBACK 共用，两边不会不一致）：
-//   readback_refusal：copy_tex_buf 拒收的原因（展开格式 / 替换存储），NULL = 能拷。拒收是粘滞错误，整段提交失败、时间线进失败终态，
+//   readback_refusal：copy_tex_buf 拒收的原因，NULL = 能拷。拒收是粘滞错误，整段提交失败、时间线进失败终态，
 //     所以 ReadTexels 这类旁路读回必须先查 READBACK 位、在开段前挡住。
-//   readback_exact：拷出来就是 NVN 的字节——不拒收，且不是深度模板合一（缓冲 ↔ 贴图一个区域只拷一个面，取深度面）、不是 D24（深度面高 8 位未定义）。
+//   readback_exact：替换的 D24/D24S8 单独打包。原生深度模板仍只拷深度面，原生 D24 深度面的高 8 位未定义。
 static const char *readback_refusal(uint32_t nvn_format) {
     nvn_fmt_info fi;
     if (nvn_fmt_info_of(nvn_format, &fi) && fi.expand) return "展开格式回读未实现";
-    if (nvn_vk_format_substituted(nvn_format)) return "替换存储格式（D24 换 D32）按字节回读未实现";
+    if (nvn_vk_format_substituted(nvn_format) && !g_d24_readback.pipe) return "D24 替换存储的回读转换不可用";
     return NULL;
 }
 static int readback_exact(uint32_t nvn_format) {
     nvn_fmt_info fi;
     if (readback_refusal(nvn_format) || !nvn_fmt_info_of(nvn_format, &fi)) return 0;
+    if (nvn_vk_format_substituted(nvn_format)) return 1;
     if (fi.depth && fi.stencil) return 0;
     if (nvn_format == NVN_FORMAT_DEPTH24) return 0;
     return 1;
@@ -2787,6 +2793,7 @@ nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     seg_drain();
     if (g.bc) nvn_vk_bcdec_destroy(g.dev, g.bc);
     deswizzle_close();
+    d24_readback_close();
     bc1_astc_close();
     free(g.submitted);
     g.submitted = NULL;
@@ -8056,6 +8063,8 @@ void nvn_gpu_copy_buf_tex(nvn_gpu_cmd ch, nvn_gpu_buf bh, uint64_t off, uint64_t
     copy_buf_tex_impl(ch, bh, off, row_bytes, image_bytes, th, level, layer, r, COPY_FACE_DEFAULT, 0);
 }
 
+#include "backend_vulkan_d24_readback.inc"
+
 void nvn_gpu_copy_tex_buf(nvn_gpu_cmd ch, nvn_gpu_tex th, uint32_t level, uint32_t layer, const NVNcopyRegion *r,
                           nvn_gpu_buf bh, uint64_t off, uint64_t row_bytes, uint64_t image_bytes) {
     { struct nvn_gpu_cmd_s *cc = ch; if (cc && cc->in_pass && rc_is(cc->sticky, NVN_GPU_OK)) { set_sticky(cc, NVN_GPU_E_ORDER, "传输操作在通道内"); return; } }
@@ -8066,6 +8075,10 @@ void nvn_gpu_copy_tex_buf(nvn_gpu_cmd ch, nvn_gpu_tex th, uint32_t level, uint32
     if (t && t->bc_decoded) { bc_readback(c, t, level, layer, r, b, off, row_bytes, image_bytes); return; }   // 按上传时留下的压缩原字节回读
     { const char *no = t ? readback_refusal(t->nvn_format) : NULL;   // 与 NVN_GPU_FMT_READBACK 同一个判断
       if (no) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "%s（0x%x）", no, t->nvn_format); return; } }
+    if (t && nvn_vk_format_substituted(t->nvn_format)) {
+        d24_readback_copy(c, t, level, layer, r, b, off, row_bytes, image_bytes);
+        return;
+    }
     uint32_t bpp = t ? fmt_bpp(t->format) : 0;
     // 块信息（同 copy_buf_tex_impl）：压缩格式一行是一排块（blk_w x blk_h 纹素、blk 字节），区域按纹素给、偏移要落在块边上；
     // 没列进 fmt_bpp 的非压缩格式按 NVN 格式表的每纹素字节数。原先这里对压缩格式一律拒绝（核心把块压缩贴图逐字节拷进影子要用它）。
