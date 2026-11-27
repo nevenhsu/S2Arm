@@ -34,9 +34,26 @@ else
   fi
 fi
 
-# 等 upstream 合入的 PR（#2242 AV1 影片解碼、#2262 帧比例实测帧时）：合進 upstream 後分支裡那份就是重複的，提醒（不自動拿掉）
+# 等 upstream 合入的 PR：#2270（原生网格 / 屏障 / 张量 / 池表优化），取维护者复审分支 contrib/pr2270-rb 的最新版合进来。
+#   合進 upstream 後提醒（不自動拿掉）；複審分支被刪了就略過
+CONTRIB=contrib/pr2270-rb
+if git -C "$REPO" fetch -q upstream "$CONTRIB" 2>/dev/null; then
+  if git merge-base --is-ancestor "upstream/$CONTRIB" HEAD; then
+    say "已包含 $CONTRIB（$(git rev-parse --short "upstream/$CONTRIB")）"
+  else
+    say "合併 $CONTRIB $(git rev-parse --short "upstream/$CONTRIB")"
+    if ! git merge --no-edit -q "upstream/$CONTRIB"; then
+      echo "合併有衝突：$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+      git merge --abort
+      echo "已取消合併。保留 upstream 的新寫法、補回優化後再跑一次。"
+      exit 1
+    fi
+  fi
+else
+  echo "提醒：upstream 已沒有 $CONTRIB（可能已合入或關閉），略過"
+fi
 if command -v gh >/dev/null; then
-  for pr in 2242 2262; do
+  for pr in 2270; do
     [ "$(gh pr view "$pr" --repo jhaizhou-ops/S2Arm --json state -q .state 2>/dev/null)" = "MERGED" ] && echo "提醒：#$pr 已合進 upstream，分支裡的那份可以拿掉了"
   done
 fi
