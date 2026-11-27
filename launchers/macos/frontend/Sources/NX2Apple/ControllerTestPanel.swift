@@ -1,6 +1,6 @@
 // S2Arm（不是上游文件）：App 菜单「手把測試」的浮动面板（开发工具，开关同「模擬手把」）。数据见 ControllerTestModel.swift。
 //   由上到下：要看的手柄（同手柄面板的清单，只能选；连接 / 拆开 / 分配在手柄面板做）→ 读数（原始六轴、3D 姿态、最近 3 秒陀螺波形；一对左右两栏）
-//   → 步骤（steps.json，没有就不显示）→ 录制（readings.tsv）。样式同模拟手柄面板：12pt、small 控件、灰色小标题、间距 4 的倍数
+//   → 步骤（内建 Joy-Con 流程，或 steps.json 的临时流程）→ 录制（每次一个 readings-<时间>-<流程>.tsv）。样式同模拟手柄面板：12pt、small 控件、灰色小标题、间距 4 的倍数
 import AppKit
 import SceneKit
 import SwiftUI
@@ -52,7 +52,7 @@ struct ControllerTestPanelView: View {
                 pickSection.padding(12)
                 Divider()
                 readingsSection.padding(12)
-                if !hub.steps.isEmpty { Divider(); stepsSection.padding(12) }
+                Divider(); stepsSection.padding(12)
                 Divider()
                 recordSection.padding(12)
             }
@@ -153,19 +153,41 @@ struct ControllerTestPanelView: View {
 
     // —— 步骤 ——
     private var stepsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
+        let flow = hub.flow, step = hub.step
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 TestLabel(SimText.pick("步驟", "步骤", "Steps"))
                 Spacer()
-                Text(SimText.pick("來自 ", "来自 ", "From ") + "~/S2Arm/dev/controller-test/steps.json").font(.system(size: 11)).foregroundStyle(.tertiary)
+                if !hub.customSteps.isEmpty {
+                    Picker("", selection: $hub.useCustom) {
+                        Text(ControllerTestFlow.joyCon.title).tag(false)
+                        Text("steps.json").tag(true)
+                    }
+                    .labelsHidden().fixedSize()
+                } else {
+                    Text(flow.title).font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
+                Button(SimText.pick("從頭", "从头", "Restart")) { hub.restartFlow() }
             }
             HStack(spacing: 8) {
-                Text("\(hub.stepIndex + 1) / \(hub.steps.count)").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
-                Text(hub.steps.indices.contains(hub.stepIndex) ? hub.steps[hub.stepIndex].text : "").font(.system(size: 13, weight: .medium))
-                    .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                if let n = hub.countdown { Text("\(n)").font(.system(size: 18, weight: .semibold, design: .monospaced)).foregroundStyle(Color.accentColor).frame(width: 28) }
+                Text("\(hub.stepIndex + 1) / \(flow.steps.count)").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(step?.text ?? "").font(.system(size: 13, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+                    if let step, step.target != .manual {
+                        if hub.stepFitsSelection {
+                            Text(SimText.pick("對準淺色的模型，停住 1 秒自動下一步", "对准浅色的模型，停住 1 秒自动下一步", "Match the pale model and hold still for 1 s to advance"))
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                            ProgressView(value: hub.holdProgress).progressViewStyle(.linear).frame(maxWidth: 160)
+                        } else {
+                            Text(step.who == .pair ? SimText.pick("這一步要在上面選 Joy-Con 2（一對）", "这一步要在上面选 Joy-Con 2（一对）", "Select the Joy-Con 2 pair above for this step")
+                                                   : SimText.pick("這一步要在上面選單只 Joy-Con 2", "这一步要在上面选单只 Joy-Con 2", "Select a single Joy-Con 2 above for this step"))
+                                .font(.system(size: 11)).foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Button(SimText.pick("上一步", "上一步", "Back")) { hub.step(-1) }.disabled(hub.stepIndex == 0)
-                Button(SimText.pick("下一步", "下一步", "Next")) { hub.step(1) }.disabled(hub.stepIndex >= hub.steps.count - 1)
+                Button(SimText.pick("下一步", "下一步", "Next")) { hub.step(1) }.disabled(hub.stepIndex >= flow.steps.count - 1)
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor)).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -190,7 +212,8 @@ struct ControllerTestPanelView: View {
                 Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(1)
             }
             Spacer()
-            Text("~/S2Arm/dev/controller-test/readings.tsv").font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(1)
+            Text("~/S2Arm/dev/controller-test/" + (hub.recordURL?.lastPathComponent ?? "readings-…tsv")).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
+                .lineLimit(1).truncationMode(.middle)
         }
     }
 }
@@ -233,7 +256,7 @@ private struct ChannelColumn: View {
             }
             let pose = hub.poseFromGame ? channel.gamePose : channel.rawPose
             ZStack(alignment: .topTrailing) {
-                PoseView(pose: pose, trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
+                PoseView(pose: pose, ghost: hub.poseFromGame ? nil : hub.ghost(for: channel), trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
                          shape: wholePad ? .wholePad : channel.side == "R" ? .joyConRight : .joyConLeft,
                          tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
                     .frame(height: 150)
@@ -312,6 +335,7 @@ private struct Wave: View {
 struct PoseView: NSViewRepresentable {
     enum Shape: Equatable { case joyConLeft, joyConRight, wholePad }
     let pose: PoseFilter
+    let ghost: simd_quatd?   // 这一步的目标姿态（淡色模型）；nil = 不画
     let trail: [SIMD3<Double>]
     let shape: Shape
     let tint: ControllerTint?
@@ -320,6 +344,7 @@ struct PoseView: NSViewRepresentable {
         let scene = SCNScene()
         let world = SCNNode()
         let device = SCNNode()
+        let ghost = SCNNode()
         var dots: [SCNNode] = []
         var shape: Shape?
         var tint: ControllerTint?
@@ -335,6 +360,9 @@ struct PoseView: NSViewRepresentable {
         c.world.eulerAngles.x = -.pi / 2
         c.scene.rootNode.addChildNode(c.world)
         c.world.addChildNode(c.device)
+        c.ghost.opacity = 0.3
+        c.ghost.renderingOrder = 1   // 半透明的画在实的后面
+        c.world.addChildNode(c.ghost)
         let floor = SCNNode(geometry: SCNPlane(width: 0.24, height: 0.24))
         floor.geometry?.firstMaterial?.diffuse.contents = Self.gridImage()
         floor.geometry?.firstMaterial?.isDoubleSided = true
@@ -365,9 +393,15 @@ struct PoseView: NSViewRepresentable {
             c.shape = shape; c.tint = tint
             c.device.childNodes.forEach { $0.removeFromParentNode() }
             Self.build(shape, tint: tint, into: c.device)
+            c.ghost.childNodes.forEach { $0.removeFromParentNode() }
+            Self.build(shape, tint: ControllerTint(body: 0x0a84ff), into: c.ghost)   // 淡蓝：浅底上也看得出
         }
         let q = pose.q
         c.device.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
+        if let g = ghost {
+            c.ghost.isHidden = false
+            c.ghost.simdOrientation = simd_quatf(ix: Float(g.imag.x), iy: Float(g.imag.y), iz: Float(g.imag.z), r: Float(g.real))
+        } else { c.ghost.isHidden = true }
         // 轨迹：最多 48 点，旧的淡
         let step = max(1, trail.count / c.dots.count)
         let picked = stride(from: trail.count - 1, through: 0, by: -step).prefix(c.dots.count).map { trail[$0] }

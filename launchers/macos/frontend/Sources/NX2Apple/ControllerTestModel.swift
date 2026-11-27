@@ -110,7 +110,6 @@ struct ControllerTestStep: Equatable {
     static var allowed: Bool { ControllerColorSimulator.allowed }
     static var folder: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("S2Arm/dev/controller-test", isDirectory: true) }
     static var stepsURL: URL { folder.appendingPathComponent("steps.json") }
-    static var readingsURL: URL { folder.appendingPathComponent("readings.tsv") }
 
     // —— 接进来的（LauncherView 接上）——
     weak var controller: NS2LauncherController?
@@ -283,6 +282,7 @@ struct ControllerTestStep: Equatable {
     private func selectionChanged() {
         releaseMotionPad()
         shownTargetID = selected?.id
+        stepStarts = [:]; matchedSince = nil
         guard let target = selected else { channels = []; return }
         switch target.kind {
         case let .relay(_, shape):
@@ -306,6 +306,7 @@ struct ControllerTestStep: Equatable {
         let current = selected?.id
         if current != shownTargetID { shownTargetID = current; selectionChanged() }
         if case let .system(id) = selected?.kind, motionPad == nil { attachMotion(id) }
+        checkStep(now: now)
         if recording != nil, now - lastFlush > 1 { lastFlush = now; flushRecording() }
         objectWillChange.send()
     }
@@ -362,48 +363,109 @@ struct ControllerTestStep: Equatable {
         motionPad = nil; motionActivated = false
     }
 
-    // —— 步骤 ——
-    @Published private(set) var steps: [ControllerTestStep] = []
+    // —— 步骤：内建流程（文字 + 淡色目标模型，对上停住 1 秒自动下一步），steps.json 有就多一个「临时流程」可选 ——
+    @Published private(set) var customSteps: [ControllerTestStep] = []
+    @Published var useCustom = false { didSet { if useCustom != oldValue { restartFlow() } } }
+    var flow: ControllerTestFlow { useCustom && !customSteps.isEmpty ? .custom(customSteps) : .joyCon }
     @Published private(set) var stepIndex = 0
     private(set) var stepStartedAt: Double = 0
+    /// 每一步开始时各边的姿态（原始读数那份）：相对转动 / 回去的目标从这里算
+    private var stepStarts: [Int: [String: simd_quatd]] = [:]
+    private var matchedSince: Double?
     private var stepsStamp: Date?
+    var step: ControllerTestFlow.Step? { flow.steps.indices.contains(stepIndex) ? flow.steps[stepIndex] : nil }
     func loadSteps(force: Bool = false) {
         let url = Self.stepsURL
         let stamp = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
         guard force || stamp != stepsStamp else { return }
         stepsStamp = stamp
         let next = stamp == nil ? [] : (try? Data(contentsOf: url)).flatMap(ControllerTestStep.parse) ?? []
-        if next != steps { steps = next; stepIndex = min(stepIndex, max(0, next.count - 1)); stepStartedAt = ProcessInfo.processInfo.systemUptime }
+        guard next != customSteps else { return }
+        customSteps = next
+        if useCustom { if next.isEmpty { useCustom = false } else { restartFlow() } }
     }
-    func step(_ delta: Int) {
-        guard !steps.isEmpty else { return }
-        stepIndex = max(0, min(steps.count - 1, stepIndex + delta))
+    func restartFlow() { goTo(0) }
+    func step(_ delta: Int) { goTo(stepIndex + delta) }
+    private func goTo(_ index: Int) {
+        stepIndex = max(0, min(flow.steps.count - 1, index))
         stepStartedAt = ProcessInfo.processInfo.systemUptime
+        matchedSince = nil
+        var starts: [String: simd_quatd] = [:]
+        for c in channels where c.rawPose.started { starts[c.side] = c.rawPose.q }
+        stepStarts[stepIndex] = starts
+        objectWillChange.send()
     }
-    var countdown: Int? {
-        guard steps.indices.contains(stepIndex), let seconds = steps[stepIndex].seconds else { return nil }
-        return max(0, Int((seconds - (ProcessInfo.processInfo.systemUptime - stepStartedAt)).rounded(.up)))
+    /// 选的手柄合不合这一步（单只的步骤要选单只 Joy-Con 2，一对的步骤要选一对）
+    var stepFitsSelection: Bool {
+        guard let who = step?.who else { return true }
+        switch who {
+        case .single: return selected?.joyConSide != nil
+        case .pair: return selected?.isPair == true
+        }
+    }
+    /// 这一边这一步的目标姿态（淡色模型）；没有目标 / 还没有姿态就 nil
+    func ghost(for channel: Channel) -> simd_quatd? {
+        guard let step, stepFitsSelection, channel.rawPose.started else { return nil }
+        let side = channel.side
+        switch step.target {
+        case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
+        case let .rotate(axis, degrees):
+            guard let start = stepStarts[stepIndex]?[side] else { return nil }
+            return ControllerTestFlow.rotated(start, axis, degrees: degrees)
+        case .back:
+            guard let start = stepStarts[stepIndex - 1]?[side] else { return nil }
+            return start
+        case .manual: return nil
+        }
+    }
+    /// 这一边对上了没（停住、差 20° 以内）
+    func matches(_ channel: Channel) -> Bool {
+        guard let s = channel.last, simd_length(s.gyro) < ControllerTestFlow.stillGyro, let step else { return false }
+        if case let .hold(hold) = step.target { return ControllerTestFlow.angle(s.accel, ControllerTestFlow.up(hold)) < ControllerTestFlow.tolerance }
+        guard let target = ghost(for: channel) else { return false }
+        return ControllerTestFlow.angle(channel.rawPose.q, target) < ControllerTestFlow.tolerance
+    }
+    /// 对上停住的进度 0…1（到 1 自动下一步）
+    var holdProgress: Double {
+        guard let since = matchedSince else { return 0 }
+        return min(1, (ProcessInfo.processInfo.systemUptime - since) / ControllerTestFlow.holdSeconds)
+    }
+    private func checkStep(now: Double) {
+        guard let step, step.target != .manual, stepFitsSelection, !channels.isEmpty else { matchedSince = nil; return }
+        // 开始姿态还没记到（刚选手柄 / 读数刚来）：现在补记
+        if stepStarts[stepIndex]?.count != channels.filter(\.rawPose.started).count {
+            var starts = stepStarts[stepIndex] ?? [:]
+            for c in channels where c.rawPose.started && starts[c.side] == nil { starts[c.side] = c.rawPose.q }
+            stepStarts[stepIndex] = starts
+        }
+        guard channels.allSatisfy(matches) else { matchedSince = nil; return }
+        if matchedSince == nil { matchedSince = now }
+        if now - matchedSince! >= ControllerTestFlow.holdSeconds, stepIndex < flow.steps.count - 1 { goTo(stepIndex + 1) }
     }
 
-    // —— 录制 ——
+    // —— 录制：每次一个文件（时间 + 流程），不盖掉之前的 ——
     private var recording: FileHandle?
     private var recordBuffer = ""
     private(set) var recordStart: Double = 0
     private(set) var recordCount = 0
+    private(set) var recordURL: URL?
     private var lastFlush: Double = 0
     var isRecording: Bool { recording != nil }
     @Published private(set) var recordError: String?
     func toggleRecording() { if recording == nil { startRecording() } else { stopRecording() } }
+    nonisolated static func recordName(date: Date, flow: String) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd-HHmmss"
+        return "readings-\(f.string(from: date))-\(flow).tsv"
+    }
     private func startRecording() {
-        let fm = FileManager.default, url = Self.readingsURL
+        let fm = FileManager.default
+        let url = Self.folder.appendingPathComponent(Self.recordName(date: Date(), flow: flow.id))
         do {
             try fm.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-            // 上一份留成 readings.prev.tsv，不直接盖掉
-            let prev = Self.folder.appendingPathComponent("readings.prev.tsv")
-            if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: prev); try? fm.moveItem(at: url, to: prev) }
             fm.createFile(atPath: url.path, contents: Data("t_ms\tcontroller\tside\tstep\tax\tay\taz\tgx\tgy\tgz\n".utf8))
             recording = try FileHandle(forWritingTo: url)
             recording?.seekToEndOfFile()
+            recordURL = url
             recordStart = ProcessInfo.processInfo.systemUptime; recordCount = 0; recordError = nil
         } catch { recordError = error.localizedDescription }
     }
@@ -417,8 +479,7 @@ struct ControllerTestStep: Equatable {
         guard recording != nil else { return }
         let ms = Int((ProcessInfo.processInfo.systemUptime - recordStart) * 1000)
         let name = (selected?.title ?? "").replacingOccurrences(of: "\t", with: " ")
-        let step = steps.isEmpty ? 0 : stepIndex + 1
-        recordBuffer += String(format: "%d\t%@\t%@\t%d\t%.4f\t%.4f\t%.4f\t%.2f\t%.2f\t%.2f\n", ms, name, side, step,
+        recordBuffer += String(format: "%d\t%@\t%@\t%@\t%.4f\t%.4f\t%.4f\t%.2f\t%.2f\t%.2f\n", ms, name, side, step?.id ?? "-",
                                s.accel.x, s.accel.y, s.accel.z, s.gyro.x, s.gyro.y, s.gyro.z)
         recordCount += 1
     }

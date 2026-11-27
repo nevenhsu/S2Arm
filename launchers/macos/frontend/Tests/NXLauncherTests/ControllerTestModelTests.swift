@@ -101,4 +101,47 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertEqual(s2a_launcher_pad_decode_motion(bytes, length, &out), -1)
         XCTAssertEqual(s2a_launcher_pad_decode_motion(bytes, 100, &out), -1)
     }
+
+    /// 内建流程的固定姿势：完整姿态里的重力方向要等于用来比对的 up（两份写法不能各说各话），左右只都一样
+    func testFlowHoldPosesAgreeWithGravity() {
+        for hold in [ControllerTestFlow.Hold.flat, .paddle, .boxing] {
+            for side in ["L", "R"] {
+                let q = ControllerTestFlow.pose(hold, side: side)
+                XCTAssertEqual(simd_length(q.vector), 1, accuracy: 1e-9)
+                XCTAssertLessThan(ControllerTestFlow.angle(q.inverse.act(PoseFilter.up), ControllerTestFlow.up(hold)), 0.01, "\(hold) \(side)")
+            }
+        }
+        // 实录：右只桌球握法 ≈ (−0.96, 0, 0) g，拳击握法 ≈ (0.2, 0.98, −0.1) g：都在 20° 以内
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(-0.96, 0, 0), ControllerTestFlow.up(.paddle)), ControllerTestFlow.tolerance)
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.2, 0.98, -0.1), ControllerTestFlow.up(.boxing)), ControllerTestFlow.tolerance)
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0, 0.12, 1.0), ControllerTestFlow.up(.flat)), ControllerTestFlow.tolerance)
+    }
+
+    /// 相对转动：绕长轴 +90°（实录：桌球握法把按键面往右翻，陀螺 Y 积分 ≈ +98°）= 用陀螺 Y 积分出来的同一个姿态
+    func testFlowRotateMatchesGyroIntegration() {
+        var pose = PoseFilter(); pose.gain = 0
+        pose.update(IMUSample(accel: SIMD3(-1, 0, 0), gyro: .zero), dt: 0)
+        let start = pose.q
+        for _ in 0..<100 { pose.update(IMUSample(accel: SIMD3(-1, 0, 0), gyro: SIMD3(0, 90, 0)), dt: 0.01) }
+        XCTAssertLessThan(ControllerTestFlow.angle(pose.q, ControllerTestFlow.rotated(start, .bodyLong, degrees: 90)), 1)
+        // 往右转 = 从上往下看顺时针：前方 +Y 转到右边 +X
+        let turned = ControllerTestFlow.rotated(simd_quatd(ix: 0, iy: 0, iz: 0, r: 1), .worldUp, degrees: -90)
+        XCTAssertGreaterThan(turned.act(SIMD3(0, 1, 0)).x, 0.99)
+    }
+
+    /// 淡色模型的水平朝向跟着手上那只：只差倾斜，水平朝向一样
+    func testYawAlignedKeepsTilt() {
+        let target = ControllerTestFlow.pose(.paddle, side: "R")
+        let live = simd_quatd(angle: 1.2, axis: SIMD3(0, 0, 1)) * target
+        XCTAssertLessThan(ControllerTestFlow.angle(ControllerTestFlow.yawAligned(target, to: live), live), 0.01)
+        let tilted = simd_quatd(angle: 0.5, axis: SIMD3(1, 0, 0)) * live
+        XCTAssertEqual(ControllerTestFlow.angle(ControllerTestFlow.yawAligned(target, to: tilted), tilted), 0.5 * 180 / .pi, accuracy: 3)
+    }
+
+    func testRecordNamePerRun() {
+        let date = Date(timeIntervalSince1970: 0)
+        let name = ControllerTestHub.recordName(date: date, flow: "joycon")
+        XCTAssertTrue(name.hasPrefix("readings-19") || name.hasPrefix("readings-1970"))
+        XCTAssertTrue(name.hasSuffix("-joycon.tsv"))
+    }
 }
