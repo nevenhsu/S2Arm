@@ -283,10 +283,7 @@ struct ControllerTestStep: Equatable {
         releaseMotionPad()
         shownTargetID = selected?.id
         stepStarts = [:]; matchedSince = nil
-        // 换手柄：没在测时自动换成合的那套（一对 → 一对测试、单只 Joy-Con → 单只测试；steps.json 不动）
-        if !running, flowID != "custom", let target = selected {
-            if target.isPair { flowID = ControllerTestFlow.joyConPair.id } else if target.joyConSide != nil { flowID = ControllerTestFlow.joyConSingle.id }
-        }
+        if !running { pickFlow() }
         guard let target = selected else { channels = []; return }
         switch target.kind {
         case let .relay(_, shape):
@@ -377,7 +374,7 @@ struct ControllerTestStep: Equatable {
 
     // —— 步骤：内建流程（文字 + 淡色目标模型，对上停住 1 秒自动下一步），steps.json 有就多一个「临时流程」可选 ——
     @Published private(set) var customSteps: [ControllerTestStep] = []
-    /// 选哪套流程：内建单只 / 一对（选手柄时自动换成合的那套），或 "custom" = steps.json
+    /// 哪套流程：跟着选的手柄（单只 / 一对），有 steps.json 就用 "custom"（面板不给选单）
     @Published var flowID = ControllerTestFlow.joyConSingle.id { didSet { if flowID != oldValue { stopRun(); restartFlow() } } }   // 换流程：停掉这一轮
     var flow: ControllerTestFlow {
         if flowID == "custom", !customSteps.isEmpty { return .custom(customSteps) }
@@ -398,9 +395,15 @@ struct ControllerTestStep: Equatable {
         let next = stamp == nil ? [] : (try? Data(contentsOf: url)).flatMap(ControllerTestStep.parse) ?? []
         guard next != customSteps else { return }
         customSteps = next
-        if flowID == "custom" { if next.isEmpty { flowID = ControllerTestFlow.joyConSingle.id } else { restartFlow() } }
+        if running { stopRun() }
+        if next.isEmpty { pickFlow() } else if flowID == "custom" { restartFlow() } else { flowID = "custom" }
     }
     func restartFlow() { goTo(0) }
+    /// 按选的手柄定流程：一对 → 一对测试、其余 → 单只测试；有 steps.json 就用它
+    private func pickFlow() {
+        if !customSteps.isEmpty { flowID = "custom"; return }
+        flowID = selected?.isPair == true ? ControllerTestFlow.joyConPair.id : ControllerTestFlow.joyConSingle.id
+    }
     /// 按「開始」才跑流程：示意模型、对上自动下一步、录制都在开始之后（11-27：没按开始，平放着的手柄就被当成第 1 步对上、自己往下走）
     @Published private(set) var running = false
     @Published private(set) var finished = false
@@ -466,7 +469,7 @@ struct ControllerTestStep: Equatable {
     /// 这一边对上了没（停住、差 20° 以内）
     func matches(_ channel: Channel) -> Bool {
         guard let s = channel.last, simd_length(s.gyro) < ControllerTestFlow.stillGyro, let step else { return false }
-        if case let .hold(hold) = step.target { return ControllerTestFlow.angle(s.accel, ControllerTestFlow.up(hold)) < ControllerTestFlow.tolerance }
+        if case let .hold(hold) = step.target { return ControllerTestFlow.angle(s.accel, ControllerTestFlow.up(hold, side: channel.side)) < ControllerTestFlow.tolerance }
         guard let target = ghost(for: channel) else { return false }
         return ControllerTestFlow.angle(channel.rawPose.q, target) < ControllerTestFlow.tolerance
     }

@@ -158,11 +158,8 @@ struct ControllerTestPanelView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 TestLabel(SimText.pick("步驟", "步骤", "Steps"))
                 Spacer()
-                Picker("", selection: $hub.flowID) {
-                    ForEach(ControllerTestFlow.builtIn, id: \.id) { Text($0.title).tag($0.id) }
-                    if !hub.customSteps.isEmpty { Text("steps.json").tag("custom") }
-                }
-                .labelsHidden().fixedSize().disabled(hub.running)
+                // 流程跟着上面选的手柄（单只 → 单只测试、一对 → 一对测试），不另给选单；有 steps.json 时用它
+                Text(flow.title).font(.system(size: 11)).foregroundStyle(.secondary)
                 // 开始 / 停止放在步骤上面（同时录制）
                 Button { hub.toggleRun() } label: {
                     HStack(spacing: 4) {

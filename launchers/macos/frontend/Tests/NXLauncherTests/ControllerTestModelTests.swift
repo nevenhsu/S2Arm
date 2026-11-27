@@ -110,11 +110,19 @@ final class ControllerTestModelTests: XCTestCase {
             for side in ["L", "R"] {
                 let q = ControllerTestFlow.pose(hold, side: side)
                 XCTAssertEqual(simd_length(q.vector), 1, accuracy: 1e-9)
-                XCTAssertLessThan(ControllerTestFlow.angle(q.inverse.act(PoseFilter.up), ControllerTestFlow.up(hold)), 0.01, "\(hold) \(side)")
+                XCTAssertLessThan(ControllerTestFlow.angle(q.inverse.act(PoseFilter.up), ControllerTestFlow.up(hold, side: side)), 0.01, "\(hold) \(side)")
             }
         }
         // 实录：右只桌球握法 ≈ (−0.96, 0, 0) g，拳击握法 ≈ (0.2, 0.98, −0.1) g：都在 20° 以内
-        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(-0.96, 0, 0), ControllerTestFlow.up(.paddle)), ControllerTestFlow.tolerance)
+        // 桌球握法用滑轨朝下（实录滑轨朝上是 (−0.96, 0, 0)，反过来就是 +X 朝上）
+        XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.96, 0, 0), ControllerTestFlow.up(.paddle)), ControllerTestFlow.tolerance)
+        // 滑轨（右只 −X、左只 +X）朝下；第 4 步翻完两只按键面都朝上
+        XCTAssertLessThan(ControllerTestFlow.pose(.paddle, side: "R").act(SIMD3(-1, 0, 0)).z, -0.99)
+        XCTAssertLessThan(ControllerTestFlow.pose(.paddle, side: "L").act(SIMD3(1, 0, 0)).z, -0.99)
+        for side in ["L", "R"] {
+            let faceUp = ControllerTestFlow.joyConSingle.illustration(side: side)[3]
+            XCTAssertGreaterThan(faceUp.act(SIMD3(0, 0, 1)).z, 0.99, side)
+        }
         XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0.2, 0.98, -0.1), ControllerTestFlow.up(.boxing)), ControllerTestFlow.tolerance)
         XCTAssertLessThan(ControllerTestFlow.angle(SIMD3(0, 0.12, 1.0), ControllerTestFlow.up(.flat)), ControllerTestFlow.tolerance)
     }
@@ -162,12 +170,15 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertTrue(pair.steps.allSatisfy { $0.who == .pair })
         let pairPoses = pair.illustration(side: "R")
         XCTAssertEqual(ControllerTestFlow.angle(pairPoses[1], pairPoses[2]), 90, accuracy: 0.1)
-        // 把手握法：一起左右转差 60°；转油门只有右只动，左只留在把手姿势；右只顶端往自己方向转 = 按键面转向人（世界 −Y）
+        // 把手握法：一起左右转差 60°；转油门只有右只动，左只留在把手姿势；握把上缘（按键面背面，朝上）往人这边转 → 背面转向人（世界 −Y）
         let leftPoses = pair.illustration(side: "L")
         XCTAssertEqual(ControllerTestFlow.angle(pairPoses[4], pairPoses[5]), 60, accuracy: 0.1)
         XCTAssertLessThan(ControllerTestFlow.angle(leftPoses[6], leftPoses[3]), 0.01)
         XCTAssertEqual(ControllerTestFlow.angle(pairPoses[6], pairPoses[3]), 45, accuracy: 0.1)
-        XCTAssertLessThan(pairPoses[6].act(SIMD3(0, 0, 1)).y, -0.6)
+        XCTAssertLessThan(pairPoses[6].act(SIMD3(0, 0, -1)).y, -0.6)
+        // 把手握法：左只顶端在右、右只顶端在左，按键面朝下
+        XCTAssertGreaterThan(leftPoses[3].act(SIMD3(0, 1, 0)).x, 0.99); XCTAssertLessThan(pairPoses[3].act(SIMD3(0, 1, 0)).x, -0.99)
+        XCTAssertLessThan(pairPoses[3].act(SIMD3(0, 0, 1)).z, -0.99)
     }
 
     /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤画右只，一对的画左右两只
