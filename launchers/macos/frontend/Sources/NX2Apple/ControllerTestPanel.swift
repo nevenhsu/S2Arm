@@ -276,8 +276,8 @@ private struct ChannelColumn: View {
                 }
                 // 测试中：右上角一张实色示意 = 淡色模型的目标姿态（同主画面的缺省视角）
                 if let poses = hub.illustration(for: channel) {
-                    StepInset(from: poses.from, to: poses.to, shape: hub.shape(for: channel),
-                              tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil)
+                    StepInset(pose: poses.to, shape: hub.shape(for: channel),
+                              tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil, camera: gizmo.camera)
                         .frame(width: 120, height: 96)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.black.opacity(0.15)))
@@ -371,7 +371,8 @@ struct PoseView: NSViewRepresentable {
             let dirs = [SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 0, -1), SIMD3<Float>(0, 1, 0)].map { v -> CGVector in
                 let c = q.act(v); return CGVector(dx: CGFloat(c.x), dy: CGFloat(-c.y))
             }
-            DispatchQueue.main.async { [weak self] in self?.gizmo?.update(dirs) }
+            let transform = pov.presentation.simdWorldTransform
+            DispatchQueue.main.async { [weak self] in self?.gizmo?.update(dirs, camera: transform) }
         }
         let camera = SCNNode()
         let scene = SCNScene()
@@ -541,13 +542,13 @@ struct PoseView: NSViewRepresentable {
     }
 }
 
-/// 步骤示意（右上角小图）：实色模型、同主画面的缺省视角；有 from 时循环从 from 转到 to（转 1.2 秒、停 0.8 秒）
+/// 步骤示意（右上角小图）：淡色模型的实色版（半透明看不清摇杆在哪边），同一个目标姿态、同主画面的镜头
 struct StepInset: NSViewRepresentable {
-    let from: simd_quatd?
-    let to: simd_quatd
+    let pose: simd_quatd                 // 淡色模型的目标姿态
     let shape: PoseView.Shape
     let tint: ControllerTint?
-    final class Coordinator { let model = SCNNode(); var shape: PoseView.Shape?; var tint: ControllerTint?; var key: simd_quatd?; var startedAt = 0.0 }
+    let camera: simd_float4x4?           // 主画面镜头（拖过视角也跟着）；nil = 缺省视角
+    final class Coordinator { let model = SCNNode(); let camera = SCNNode(); var shape: PoseView.Shape?; var tint: ControllerTint? }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView(), scene = SCNScene(), world = SCNNode()
@@ -558,8 +559,9 @@ struct StepInset: NSViewRepresentable {
         world.eulerAngles.x = -.pi / 2
         scene.rootNode.addChildNode(world)
         world.addChildNode(context.coordinator.model)
-        let camera = SCNNode(); camera.camera = SCNCamera(); camera.camera?.fieldOfView = 40; camera.camera?.zNear = 0.01
-        camera.position = PoseView.cameraHome; camera.look(at: SCNVector3(0, 0, 0))   // 同主画面的缺省视角（正前方稍高），跟淡色模型看起来一样
+        let camera = context.coordinator.camera
+        camera.camera = SCNCamera(); camera.camera?.fieldOfView = 40; camera.camera?.zNear = 0.01
+        camera.position = PoseView.cameraHome; camera.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(camera); view.pointOfView = camera
         return view
     }
@@ -570,15 +572,8 @@ struct StepInset: NSViewRepresentable {
             c.model.childNodes.forEach { $0.removeFromParentNode() }
             PoseView.build(shape, tint: tint, into: c.model)
         }
-        let now = ProcessInfo.processInfo.systemUptime
-        if c.key.map({ ControllerTestFlow.angle($0, to) > 0.5 }) ?? true { c.key = to; c.startedAt = now }   // 换步骤：动画从头
-        var q = to
-        if let from {
-            let phase = (now - c.startedAt).truncatingRemainder(dividingBy: 2.0)
-            let t = min(1, phase / 1.2)
-            q = simd_slerp(from, to, t * t * (3 - 2 * t))
-        }
-        c.model.simdOrientation = simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real))
+        if let camera { c.camera.simdWorldTransform = camera }
+        c.model.simdOrientation = simd_quatf(ix: Float(pose.imag.x), iy: Float(pose.imag.y), iz: Float(pose.imag.z), r: Float(pose.real))
     }
 }
 
@@ -588,9 +583,12 @@ final class GizmoState: ObservableObject {
     var orbit: (CGFloat, CGFloat) -> Void = { _, _ in }
     var reset: () -> Void = {}
     @Published private(set) var dirs: [CGVector] = [CGVector(dx: 1, dy: 0), CGVector(dx: 0, dy: -0.35), CGVector(dx: 0, dy: -0.94)]
-    func update(_ next: [CGVector]) {
-        guard zip(next, dirs).contains(where: { abs($0.dx - $1.dx) + abs($0.dy - $1.dy) > 0.01 }) else { return }   // 没转就不重画
-        dirs = next
+    /// 主画面镜头现在的位置 / 朝向（右上角示意跟着用同一个，看起来跟淡色模型一样）；nil = 还没画过，用缺省视角
+    @Published private(set) var camera: simd_float4x4?
+    func update(_ next: [CGVector], camera next4: simd_float4x4) {
+        let moved = camera.map { c in (0..<4).contains { i in simd_length(c[i] - next4[i]) > 1e-4 } } ?? true
+        guard moved || zip(next, dirs).contains(where: { abs($0.dx - $1.dx) + abs($0.dy - $1.dy) > 0.01 }) else { return }   // 没转就不重画
+        dirs = next; camera = next4
     }
 }
 
