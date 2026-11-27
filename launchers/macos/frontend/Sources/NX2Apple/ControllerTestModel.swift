@@ -457,10 +457,10 @@ struct ControllerTestStep: Equatable {
         let side = channel.side
         switch step.target {
         case let .hold(hold): return ControllerTestFlow.yawAligned(ControllerTestFlow.pose(hold, side: side), to: channel.rawPose.q)
-        case let .rotate(axis, degrees, from, only):
+        case let .rotate(axis, degrees, from, only, mirror):
             guard let base = from.flatMap({ endPose(of: $0, side: side) }) ?? stepStarts[stepIndex]?[side] else { return nil }
             if let only, only != side { return base }   // 只有另一边转：这一边留在原处
-            return ControllerTestFlow.rotated(base, axis, degrees: degrees, side: side)
+            return ControllerTestFlow.rotated(base, axis, degrees: mirror && side == "L" ? -degrees : degrees, side: side)
         // 从中间某一步开始、那一步还没做过：用标准示意姿态（水平朝向跟着手上那只）
         case let .back(to): return endPose(of: to, side: side) ?? ControllerTestFlow.yawAligned(flow.illustration(side: side)[stepIndex], to: channel.rawPose.q)
         case .manual: return nil

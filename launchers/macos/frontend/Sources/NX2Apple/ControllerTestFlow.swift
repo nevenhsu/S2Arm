@@ -18,7 +18,8 @@ struct ControllerTestFlow {
     enum Target: Equatable {
         case hold(Hold)
         /// 从某一步做完时的姿态（from = 那一步的 id；nil = 上一步做完 / 这一步开始时）绕轴转几度；only = 只有这一边（L / R）转，另一边留在 from
-        case rotate(Axis, degrees: Double, from: String? = nil, only: String? = nil)
+        ///   mirror = 左只转反方向（正手：右手往右、左手往左）
+        case rotate(Axis, degrees: Double, from: String? = nil, only: String? = nil, mirror: Bool = false)
         /// 回到某一步做完时的姿态
         case back(to: String)
         case manual   // steps.json 的步骤：没有目标，手动下一步
@@ -40,8 +41,9 @@ struct ControllerTestFlow {
     static let joyConSingle = ControllerTestFlow(id: "joycon-single", hant: "Joy-Con 單只測試", hans: "Joy-Con 单只测试", en: "Joy-Con single test", steps: [
         Step(id: "1-start", hant: "橫握・立：連接邊（滑軌）朝下立起來，搖桿那頭朝向你", hans: "横握・立：连接边（滑轨）朝下立起来，摇杆那头朝向你",
              en: "Sideways, standing on the rail edge, stick end toward you", who: .single, target: .hold(.paddle)),
-        Step(id: "2-forehand", hant: "往右轉 90°，停在正手揮拍收拍的位置", hans: "往右转 90°，停在正手挥拍收拍的位置",
-             en: "Turn 90° right and stop at the end of a forehand swing", who: .single, target: .rotate(.worldUp, degrees: -90, from: "1-start")),
+        Step(id: "2-forehand", hant: "往正手方向水平轉 90°（右只往右、左只往左），停在收拍的位置", hans: "往正手方向水平转 90°（右只往右、左只往左），停在收拍的位置",
+             en: "Turn 90° the forehand way (right one to the right, left one to the left) and stop at the finish", who: .single,
+             target: .rotate(.worldUp, degrees: -90, from: "1-start", mirror: true)),
         Step(id: "3-start", hant: "回到起始姿勢", hans: "回到起始姿势", en: "Back to the start pose", who: .single, target: .back(to: "1-start")),
         Step(id: "4-face-up", hant: "沿長邊翻 90°，讓按鍵面朝上", hans: "沿长边翻 90°，让按键面朝上", en: "Roll it 90° along its length so the buttons face up", who: .single, target: .rotate(.bodyLong, degrees: 90, from: "1-start")),
         Step(id: "5-start", hant: "回到起始姿勢", hans: "回到起始姿势", en: "Back to the start pose", who: .single, target: .back(to: "1-start")),
@@ -137,9 +139,9 @@ struct ControllerTestFlow {
         for step in steps {
             switch step.target {
             case let .hold(hold): current = Self.pose(hold, side: side)
-            case let .rotate(axis, degrees, from, only):
+            case let .rotate(axis, degrees, from, only, mirror):
                 let base = from.flatMap { ends[$0] } ?? current
-                current = only.map { $0 == side } ?? true ? Self.rotated(base, axis, degrees: degrees, side: side) : base
+                current = only.map { $0 == side } ?? true ? Self.rotated(base, axis, degrees: mirror && side == "L" ? -degrees : degrees, side: side) : base
             case let .back(to): current = ends[to] ?? current
             case .manual: break
             }

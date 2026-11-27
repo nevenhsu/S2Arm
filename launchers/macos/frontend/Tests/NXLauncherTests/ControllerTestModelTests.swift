@@ -164,6 +164,8 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertLessThan(ControllerTestFlow.angle(poses[2], poses[0]), 0.01)
         XCTAssertLessThan(ControllerTestFlow.angle(poses[4], poses[0]), 0.01)
         XCTAssertGreaterThan(poses[1].act(SIMD3(0, 1, 0)).x, 0.99)
+        // 左只正手往左转：转完远端（左只 −Y）朝左
+        XCTAssertLessThan(flow.illustration(side: "L")[1].act(SIMD3(0, -1, 0)).x, -0.99)
         XCTAssertTrue(flow.steps.allSatisfy { $0.who == .single })
         // 一对：往左倾从立直算，跟往右倾差 90°
         let pair = ControllerTestFlow.joyConPair
@@ -181,7 +183,7 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertLessThan(pairPoses[3].act(SIMD3(0, 0, 1)).z, -0.99)
     }
 
-    /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤画右只，一对的画左右两只
+    /// 出示意图给人看（S2A_FLOW_RENDER=<输出文件.png> 时才跑）：每一步一格，同面板的 3D 模型；单只的步骤左右只各画一只，一对的画左右两只
     @MainActor func testRenderFlowSheet() throws {
         guard let out = ProcessInfo.processInfo.environment["S2A_FLOW_RENDER"] else { throw XCTSkip("S2A_FLOW_RENDER 没设") }
         let flow = ControllerTestFlow(id: "all", hant: "", hans: "", en: "", steps: ControllerTestFlow.joyConSingle.steps + ControllerTestFlow.joyConPair.steps)
@@ -213,8 +215,8 @@ final class ControllerTestModelTests: XCTestCase {
         for (i, step) in flow.steps.enumerated() {
             let col = i % cols, row = i / cols
             let origin = NSPoint(x: CGFloat(col) * cell.width, y: sheet.size.height - CGFloat(row + 1) * cell.height)
-            let items: [(PoseView.Shape, simd_quatd, CGFloat)] = step.who == .pair
-                ? [(.joyConLeft, left[i], -0.06), (.joyConRight, right[i], 0.06)] : [(.joyConRight, right[i], 0)]
+            // 单只的步骤左右只各画一只（左只在左、右只在右，各自单独测）
+            let items: [(PoseView.Shape, simd_quatd, CGFloat)] = [(.joyConLeft, left[i], -0.065), (.joyConRight, right[i], 0.065)]
             render(items).draw(in: NSRect(x: origin.x + 4, y: origin.y + 40, width: cell.width - 8, height: cell.height - 44))
             let text = "\(i + 1). " + step.hant + "\n" + step.en
             (text as NSString).draw(in: NSRect(x: origin.x + 8, y: origin.y + 2, width: cell.width - 16, height: 38),
