@@ -270,4 +270,13 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertEqual(Gen1Look.defaultTint(left: true).body, 0x0ab9e6)
         XCTAssertEqual(Gen1Look.defaultTint(left: false).body, 0xff3c28)
     }
+
+    /// 正式版（带 SUFeedURL）没有「手把測試」：开关跟「模擬手把」同一个，偏好开着也不行；没有更新源、偏好开着才有
+    @MainActor func testPanelOnlyInBuildsWithoutUpdateFeed() {
+        let feed: [String: Any] = ["SUFeedURL": "https://example.invalid/appcast.xml"]
+        XCTAssertFalse(ControllerColorSimulator.isAllowed(preference: true, info: feed))
+        XCTAssertFalse(ControllerColorSimulator.isAllowed(preference: false, info: [:]))
+        XCTAssertTrue(ControllerColorSimulator.isAllowed(preference: true, info: [:]))
+        XCTAssertEqual(ControllerTestHub.allowed, ControllerColorSimulator.allowed)
+    }
 }
