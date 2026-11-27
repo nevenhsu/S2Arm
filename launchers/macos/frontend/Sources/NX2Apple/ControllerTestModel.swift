@@ -140,8 +140,6 @@ struct ControllerTestStep: Equatable {
     }
     @Published var selectedID: String? { didSet { if selectedID != oldValue { selectionChanged() } } }
     @Published var poseFromGame = false
-    /// 3D 视角回正（按一下加一，PoseView 看到变了就放回原来的镜头）
-    @Published var viewReset = 0
     /// 面板开着（不开就不读、不开体感）
     private(set) var open = false
 

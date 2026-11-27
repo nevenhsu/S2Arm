@@ -242,6 +242,7 @@ private struct TestDot: View {
 /// 一栏：标题、3D 姿态、六轴（置中长条 + 数字）、最近 3 秒陀螺波形
 private struct ChannelColumn: View {
     @ObservedObject var hub: ControllerTestHub
+    @StateObject private var gizmo = GizmoState()   // 三轴钮跟着这一栏 3D 的视角转
     let channel: ControllerTestHub.Channel
     let pair: Bool
     let wholePad: Bool
@@ -259,14 +260,13 @@ private struct ChannelColumn: View {
             ZStack(alignment: .topLeading) {
                 PoseView(pose: pose, ghost: hub.poseFromGame ? nil : hub.ghost(for: channel), trail: hub.poseFromGame ? channel.trailGame.map(\.p) : channel.trailRaw.map(\.p),
                          shape: hub.shape(for: channel),
-                         tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil, viewReset: hub.viewReset)
+                         tint: hub.selected?.dots[pair && channel.side == "R" ? 1 : 0] ?? nil, gizmo: gizmo)
                     .frame(height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     // 拖动转过视角后一键回到原来的斜视角（「歸正」是重设手柄的水平朝向，这个只动镜头）
                     .overlay(alignment: .bottomTrailing) {
-                        Button { hub.viewReset += 1 } label: { AxisGizmo().frame(width: 34, height: 34) }
-                            .buttonStyle(.plain).padding(6)
-                            .help(SimText.pick("視角回正", "视角回正", "Reset view"))
+                        AxisGizmo(state: gizmo).frame(width: 34, height: 34).padding(6)
+                            .help(SimText.pick("拖動轉視角，點一下回到預設視角", "拖动转视角，点一下回到默认视角", "Drag to orbit; click to reset the view"))
                             .accessibilityLabel(SimText.pick("視角回正", "视角回正", "Reset view"))
                     }
                 if let s {
@@ -359,11 +359,20 @@ struct PoseView: NSViewRepresentable {
     let trail: [SIMD3<Double>]
     let shape: Shape
     let tint: ControllerTint?
-    var viewReset = 0   // 变了就把镜头放回原来的斜视角（拖动 / 缩放过之后）
+    var gizmo: GizmoState? = nil   // 每画一帧把三轴在画面上的方向告诉三轴钮；三轴钮拖动 / 点一下经它转镜头 / 回到缺省视角
 
-    final class Coordinator {
+    final class Coordinator: NSObject, SCNSceneRendererDelegate {
+        weak var gizmo: GizmoState?
+        /// 每画一帧：世界三轴（世界节点绕 X 转了 −90°：X → 场景 X、Y → 场景 −Z、Z → 场景 Y）换到镜头坐标，取画面上的方向
+        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            guard let pov = renderer.pointOfView else { return }
+            let q = pov.presentation.simdWorldOrientation.inverse
+            let dirs = [SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 0, -1), SIMD3<Float>(0, 1, 0)].map { v -> CGVector in
+                let c = q.act(v); return CGVector(dx: CGFloat(c.x), dy: CGFloat(-c.y))
+            }
+            DispatchQueue.main.async { [weak self] in self?.gizmo?.update(dirs) }
+        }
         let camera = SCNNode()
-        var viewReset = 0
         let scene = SCNScene()
         let world = SCNNode()
         let device = SCNNode()
@@ -381,6 +390,7 @@ struct PoseView: NSViewRepresentable {
         view.backgroundColor = NSColor(calibratedRed: 0.96, green: 0.97, blue: 0.98, alpha: 1)
         view.antialiasingMode = .multisampling4X
         view.autoenablesDefaultLighting = true
+        view.delegate = context.coordinator
         view.allowsCameraControl = true   // 拖动转视角、捏合缩放；双击回到原视角
         c.world.eulerAngles.x = -.pi / 2
         c.scene.rootNode.addChildNode(c.world)
@@ -410,9 +420,10 @@ struct PoseView: NSViewRepresentable {
         }
         return view
     }
-    /// 原来的斜视角：屏幕前的人那边偏右、稍高处，看着原点
+    /// 缺省 / 回正的视角：屏幕前的人那边正前方、稍高处，看着原点（11-27 使用者定）
+    static let cameraHome = SCNVector3(0, 0.09, 0.24)
     static func placeCamera(_ camera: SCNNode, in view: SCNView) {
-        camera.position = SCNVector3(0.1, 0.11, 0.21)
+        camera.position = cameraHome
         camera.look(at: SCNVector3(0, 0, 0))
         view.pointOfView = camera
         view.defaultCameraController.pointOfView = camera
@@ -420,7 +431,12 @@ struct PoseView: NSViewRepresentable {
     }
     func updateNSView(_ view: SCNView, context: Context) {
         let c = context.coordinator
-        if c.viewReset != viewReset { c.viewReset = viewReset; Self.placeCamera(c.camera, in: view) }
+        if c.gizmo !== gizmo {
+            c.gizmo = gizmo
+            let camera = c.camera
+            gizmo?.reset = { [weak view] in if let view { Self.placeCamera(camera, in: view) } }
+            gizmo?.orbit = { [weak view] dx, dy in view?.defaultCameraController.rotateBy(x: Float(dx), y: Float(-dy)) }
+        }
         if c.shape != shape || c.tint != tint {
             c.shape = shape; c.tint = tint
             c.device.childNodes.forEach { $0.removeFromParentNode() }
@@ -556,20 +572,53 @@ struct StepInset: NSViewRepresentable {
     }
 }
 
-/// 视角回正钮：画世界三轴（红 X 右、绿 Y 往屏幕里、蓝 Z 上，照原来的斜视角），点一下镜头回到原来的位置
+/// 三轴钮现在画的方向（PoseView 每画一帧送来：世界 X、Y、Z 在画面上的方向，长度 = 跟画面平行的程度）
+final class GizmoState: ObservableObject {
+    /// PoseView 接上：转镜头（拖动的位移，点）/ 回到缺省视角
+    var orbit: (CGFloat, CGFloat) -> Void = { _, _ in }
+    var reset: () -> Void = {}
+    @Published private(set) var dirs: [CGVector] = [CGVector(dx: 1, dy: 0), CGVector(dx: 0, dy: -0.35), CGVector(dx: 0, dy: -0.94)]
+    func update(_ next: [CGVector]) {
+        guard zip(next, dirs).contains(where: { abs($0.dx - $1.dx) + abs($0.dy - $1.dy) > 0.01 }) else { return }   // 没转就不重画
+        dirs = next
+    }
+}
+
+/// 视角回正钮：画世界三轴（红 X、绿 Y、蓝 Z），跟着 3D 的视角转；点一下镜头回到缺省视角
 private struct AxisGizmo: View {
+    @ObservedObject var state: GizmoState
     var body: some View {
         Canvas { ctx, size in
-            let o = CGPoint(x: size.width * 0.42, y: size.height * 0.62), r = size.width * 0.34
-            let axes: [(CGVector, Color, String)] = [(CGVector(dx: 1, dy: 0.3), AxisColor.x, "X"), (CGVector(dx: 0.45, dy: -0.55), AxisColor.y, "Y"), (CGVector(dx: 0, dy: -1), AxisColor.z, "Z")]
-            for (d, color, name) in axes {
+            let o = CGPoint(x: size.width / 2, y: size.height / 2), r = size.width * 0.3
+            let colors = [AxisColor.x, AxisColor.y, AxisColor.z], names = ["X", "Y", "Z"]
+            // 朝里的轴先画（被朝外的盖住）
+            for i in [0, 1, 2].sorted(by: { depth($0) < depth($1) }) {
+                let d = state.dirs[i]
                 let end = CGPoint(x: o.x + d.dx * r, y: o.y + d.dy * r)
-                ctx.stroke(Path { $0.move(to: o); $0.addLine(to: end) }, with: .color(color), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                ctx.draw(Text(name).font(.system(size: 8, weight: .bold)).foregroundColor(color), at: CGPoint(x: o.x + d.dx * (r + 5), y: o.y + d.dy * (r + 5)))
+                ctx.stroke(Path { $0.move(to: o); $0.addLine(to: end) }, with: .color(colors[i]), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                ctx.draw(Text(names[i]).font(.system(size: 8, weight: .bold)).foregroundColor(colors[i]), at: CGPoint(x: o.x + d.dx * (r + 6), y: o.y + d.dy * (r + 6)))
             }
         }
         .background(Circle().fill(Color.white.opacity(0.9)))
         .overlay(Circle().strokeBorder(Color.black.opacity(0.15)))
         .contentShape(Circle())
+        // 拖动 = 转视角（同在 3D 画面上拖）；没拖动的一下点击 = 回到缺省视角
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let d = CGSize(width: g.translation.width - last.width, height: g.translation.height - last.height)
+                last = g.translation
+                if hypot(g.translation.width, g.translation.height) > 3 { moved = true; state.orbit(d.width * 2, d.height * 2) }
+            }
+            .onEnded { _ in
+                if !moved { state.reset() }
+                moved = false; last = .zero
+            })
+        .accessibilityLabel(SimText.pick("視角", "视角", "View angle"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { state.reset() }
     }
+    @State private var last = CGSize.zero
+    @State private var moved = false
+    /// 越短的轴越接近朝着 / 背着镜头：先画
+    private func depth(_ i: Int) -> CGFloat { hypot(state.dirs[i].dx, state.dirs[i].dy) }
 }
