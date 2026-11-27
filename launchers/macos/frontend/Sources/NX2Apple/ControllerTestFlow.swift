@@ -66,10 +66,13 @@ struct ControllerTestFlow {
         Step(id: "6-tilt-left", hant: "兩只一起往左下傾斜 30°（左邊往下，從水平算）", hans: "两只一起往左下倾斜 30°（左边往下，从水平算）", en: "Tilt both 30° down to the left (left side down, from level)",
              who: .pair, target: .rotate(.faceForward, degrees: -30, from: "4-handlebar")),
         // 转握把（像转油门）：握把上缘往自己这边转；左右只顶端一个朝右一个朝左、绕远端方向转的角度同号
-        Step(id: "7-twist-right", hant: "回到水平，右手那只往自己的方向轉 45°（像轉油門），左手那只不動", hans: "回到水平，右手那只往自己的方向转 45°（像转油门），左手那只不动",
-             en: "Back to level, then twist the right one 45° toward you (like a throttle); keep the left one still",
+        // 转握把前先回到平握（11-27 使用者：倾斜完直接写「回到水平再转油门」容易困惑，分成两步）
+        Step(id: "7-level", hant: "回到水平：兩只都朝下平握（同把手起始姿勢）", hans: "回到水平：两只都朝下平握（同把手起始姿势）",
+             en: "Back to level: both held flat, sticks down (the handlebar start pose)", who: .pair, target: .back(to: "4-handlebar")),
+        Step(id: "8-twist-right", hant: "右手那只往自己的方向轉 45°（像轉油門），左手那只不動", hans: "右手那只往自己的方向转 45°（像转油门），左手那只不动",
+             en: "Twist the right one 45° toward you (like a throttle); keep the left one still",
              who: .pair, target: .rotate(.bodyLong, degrees: -45, from: "4-handlebar", only: "R")),
-        Step(id: "8-twist-left", hant: "右手那只轉回來，換左手那只往自己的方向轉 45°", hans: "右手那只转回来，换左手那只往自己的方向转 45°",
+        Step(id: "9-twist-left", hant: "右手那只轉回來，換左手那只往自己的方向轉 45°", hans: "右手那只转回来，换左手那只往自己的方向转 45°",
              en: "Twist the right one back, then twist the left one 45° toward you",
              who: .pair, target: .rotate(.bodyLong, degrees: -45, from: "4-handlebar", only: "L")),
     ])

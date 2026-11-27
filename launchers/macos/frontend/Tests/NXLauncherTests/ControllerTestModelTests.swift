@@ -179,11 +179,14 @@ final class ControllerTestModelTests: XCTestCase {
         XCTAssertEqual(ControllerTestFlow.angle(pairPoses[4], pairPoses[5]), 60, accuracy: 0.1)
         XCTAssertLessThan(pairPoses[4].act(SIMD3(0, -1, 0)).z, -0.4)   // 右只顶端朝左：−Y 是右端
         XCTAssertLessThan(leftPoses[4].act(SIMD3(0, 1, 0)).z, -0.4)    // 左只顶端（+Y）朝右
+        // 第 7 步回到平握 = 把手起始姿势；第 8 步只有右只转、第 9 步只有左只转
+        XCTAssertLessThan(ControllerTestFlow.angle(pairPoses[6], pairPoses[3]), 0.01)
         XCTAssertLessThan(ControllerTestFlow.angle(leftPoses[6], leftPoses[3]), 0.01)
-        XCTAssertLessThan(ControllerTestFlow.angle(pairPoses[7], pairPoses[3]), 0.01)
-        XCTAssertEqual(ControllerTestFlow.angle(pairPoses[6], pairPoses[3]), 45, accuracy: 0.1)
-        XCTAssertLessThan(pairPoses[6].act(SIMD3(0, 0, -1)).y, -0.6)
-        XCTAssertLessThan(leftPoses[7].act(SIMD3(0, 0, -1)).y, -0.6)
+        XCTAssertLessThan(ControllerTestFlow.angle(leftPoses[7], leftPoses[3]), 0.01)
+        XCTAssertLessThan(ControllerTestFlow.angle(pairPoses[8], pairPoses[3]), 0.01)
+        XCTAssertEqual(ControllerTestFlow.angle(pairPoses[7], pairPoses[3]), 45, accuracy: 0.1)
+        XCTAssertLessThan(pairPoses[7].act(SIMD3(0, 0, -1)).y, -0.6)
+        XCTAssertLessThan(leftPoses[8].act(SIMD3(0, 0, -1)).y, -0.6)
         // 把手握法：左只顶端在右、右只顶端在左，按键面朝下
         XCTAssertGreaterThan(leftPoses[3].act(SIMD3(0, 1, 0)).x, 0.99); XCTAssertLessThan(pairPoses[3].act(SIMD3(0, 1, 0)).x, -0.99)
         XCTAssertLessThan(pairPoses[3].act(SIMD3(0, 0, 1)).z, -0.99)
